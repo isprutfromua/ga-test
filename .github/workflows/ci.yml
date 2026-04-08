@@ -2,7 +2,23 @@ name: ci
 
 on:
   push:
+    paths:
+      - '**/*.go'
+      - 'go.mod'
+      - 'go.sum'
+      - '.golangci.yml'
+      - 'swagger.yaml'
+      - 'internal/db/migrations/**/*.sql'
+      - '.github/workflows/ci.yml'
   pull_request:
+    paths:
+      - '**/*.go'
+      - 'go.mod'
+      - 'go.sum'
+      - '.golangci.yml'
+      - 'swagger.yaml'
+      - 'internal/db/migrations/**/*.sql'
+      - '.github/workflows/ci.yml'
 
 jobs:
   lint:
