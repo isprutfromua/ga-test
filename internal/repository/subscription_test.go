@@ -12,6 +12,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/isprutfromua/ga-test/internal/models"
+	"github.com/isprutfromua/ga-test/internal/tokenhash"
 )
 
 type mockPGError struct {
@@ -109,13 +110,15 @@ func TestGetByTokens(t *testing.T) {
 
 			clause := "confirm_token = $1"
 			if !tt.byConfirm {
-				clause = "unsubscribe_token = $1"
+				clause = "unsubscribe_token = $1 OR unsubscribe_token = $2"
+			} else {
+				clause = "confirm_token = $1 OR confirm_token = $2"
 			}
 			q := regexp.QuoteMeta(`
 SELECT id, email, repo, confirmed, last_seen_tag, confirm_token, unsubscribe_token, created_at, updated_at
 FROM subscriptions WHERE ` + clause)
 
-			exp := mock.ExpectQuery(q).WithArgs("token")
+			exp := mock.ExpectQuery(q).WithArgs("token", tokenhash.Hash("token"))
 			now := time.Now()
 			if tt.scanErr != nil {
 				exp.WillReturnError(tt.scanErr)
@@ -155,6 +158,97 @@ FROM subscriptions WHERE ` + clause)
 			mustMeetExpectations(t, mock)
 		})
 	}
+}
+
+func TestAcquireScanLock(t *testing.T) {
+	t.Run("lock acquired", func(t *testing.T) {
+		repo, mock, closeDB := newMockRepo(t)
+		defer closeDB()
+
+		mock.ExpectQuery(regexp.QuoteMeta(`SELECT pg_try_advisory_lock($1)`)).
+			WithArgs(scannerAdvisoryLockKey).
+			WillReturnRows(sqlmock.NewRows([]string{"pg_try_advisory_lock"}).AddRow(true))
+		mock.ExpectExec(regexp.QuoteMeta(`SELECT pg_advisory_unlock($1)`)).
+			WithArgs(scannerAdvisoryLockKey).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+
+		release, acquired, err := repo.AcquireScanLock(context.Background())
+		if err != nil {
+			t.Fatalf("AcquireScanLock() unexpected error: %v", err)
+		}
+		if !acquired {
+			t.Fatal("AcquireScanLock() acquired = false, want true")
+		}
+		if release == nil {
+			t.Fatal("AcquireScanLock() release is nil")
+		}
+
+		release()
+		mustMeetExpectations(t, mock)
+	})
+
+	t.Run("lock not acquired", func(t *testing.T) {
+		repo, mock, closeDB := newMockRepo(t)
+		defer closeDB()
+
+		mock.ExpectQuery(regexp.QuoteMeta(`SELECT pg_try_advisory_lock($1)`)).
+			WithArgs(scannerAdvisoryLockKey).
+			WillReturnRows(sqlmock.NewRows([]string{"pg_try_advisory_lock"}).AddRow(false))
+
+		release, acquired, err := repo.AcquireScanLock(context.Background())
+		if err != nil {
+			t.Fatalf("AcquireScanLock() unexpected error: %v", err)
+		}
+		if acquired {
+			t.Fatal("AcquireScanLock() acquired = true, want false")
+		}
+		if release != nil {
+			t.Fatal("AcquireScanLock() release should be nil when not acquired")
+		}
+
+		mustMeetExpectations(t, mock)
+	})
+}
+
+func TestNotificationIdempotencyMethods(t *testing.T) {
+	t.Run("WasNotified true", func(t *testing.T) {
+		repo, mock, closeDB := newMockRepo(t)
+		defer closeDB()
+
+		q := regexp.QuoteMeta(`
+SELECT EXISTS(
+	SELECT 1 FROM notification_log WHERE subscription_id = $1 AND tag_name = $2
+)`)
+		mock.ExpectQuery(q).
+			WithArgs(int64(10), "v1.2.3").
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+
+		exists, err := repo.WasNotified(context.Background(), 10, "v1.2.3")
+		if err != nil {
+			t.Fatalf("WasNotified() unexpected error: %v", err)
+		}
+		if !exists {
+			t.Fatal("WasNotified() = false, want true")
+		}
+		mustMeetExpectations(t, mock)
+	})
+
+	t.Run("MarkNotified inserts with upsert semantics", func(t *testing.T) {
+		repo, mock, closeDB := newMockRepo(t)
+		defer closeDB()
+
+		mock.ExpectExec(regexp.QuoteMeta(`
+INSERT INTO notification_log (subscription_id, tag_name)
+VALUES ($1, $2)
+ON CONFLICT (subscription_id, tag_name) DO NOTHING`)).
+			WithArgs(int64(10), "v1.2.3").
+			WillReturnResult(sqlmock.NewResult(0, 1))
+
+		if err := repo.MarkNotified(context.Background(), 10, "v1.2.3"); err != nil {
+			t.Fatalf("MarkNotified() unexpected error: %v", err)
+		}
+		mustMeetExpectations(t, mock)
+	})
 }
 
 func TestConfirmDeleteAndUpdateLastSeenTag(t *testing.T) {

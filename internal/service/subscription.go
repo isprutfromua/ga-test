@@ -13,6 +13,7 @@ import (
 	"github.com/isprutfromua/ga-test/internal/metrics"
 	"github.com/isprutfromua/ga-test/internal/models"
 	"github.com/isprutfromua/ga-test/internal/repository"
+	"github.com/isprutfromua/ga-test/internal/tokenhash"
 )
 
 const (
@@ -87,7 +88,7 @@ func (s *subscriptionService) Subscribe(ctx context.Context, email, repo string)
 	if err != nil { return fmt.Errorf("generating confirm token: %w", err) }
 	unsubToken, err := generateToken()
 	if err != nil { return fmt.Errorf("generating unsubscribe token: %w", err) }
-	sub := &models.Subscription{Email: email, Repo: repo, Confirmed: false, LastSeenTag: "", ConfirmToken: confirmToken, UnsubscribeToken: unsubToken}
+	sub := &models.Subscription{Email: email, Repo: repo, Confirmed: false, LastSeenTag: "", ConfirmToken: tokenhash.Hash(confirmToken), UnsubscribeToken: tokenhash.Hash(unsubToken)}
 	if err := s.repo.Create(ctx, sub); err != nil { return err }
 	s.metrics.SubscriptionsTotal.Inc()
 
@@ -95,8 +96,12 @@ func (s *subscriptionService) Subscribe(ctx context.Context, email, repo string)
 	select {
 	case s.mailQ <- confirmationJob{email: email, repo: repo, confirmURL: confirmURL}:
 	default:
-		// Queue saturation is treated as a delivery failure while preserving API contract.
-		s.metrics.EmailErrors.Inc()
+		// Fallback to inline send to avoid silently dropping confirmations.
+		if err := s.mailer.SendConfirmation(email, repo, confirmURL); err != nil {
+			s.metrics.EmailErrors.Inc()
+		} else {
+			s.metrics.EmailsSent.Inc()
+		}
 	}
 
 	return nil

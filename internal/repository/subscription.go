@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/isprutfromua/ga-test/internal/models"
+	"github.com/isprutfromua/ga-test/internal/tokenhash"
 )
 
 const dbOperationTimeout = 5 * time.Second
@@ -20,6 +21,9 @@ type SubscriptionRepository interface {
 	Create(ctx context.Context, sub *models.Subscription) error
 	GetByConfirmToken(ctx context.Context, token string) (*models.Subscription, error)
 	GetByUnsubscribeToken(ctx context.Context, token string) (*models.Subscription, error)
+	AcquireScanLock(ctx context.Context) (release func(), acquired bool, err error)
+	WasNotified(ctx context.Context, subscriptionID int64, tag string) (bool, error)
+	MarkNotified(ctx context.Context, subscriptionID int64, tag string) error
 	Confirm(ctx context.Context, id int64) error
 	Delete(ctx context.Context, id int64) error
 	GetByEmail(ctx context.Context, email string) ([]*models.Subscription, error)
@@ -28,6 +32,8 @@ type SubscriptionRepository interface {
 }
 
 type postgresRepository struct{ db *sql.DB }
+
+const scannerAdvisoryLockKey int64 = 20426001
 
 func NewPostgresRepository(db *sql.DB) SubscriptionRepository { return &postgresRepository{db: db} }
 
@@ -49,23 +55,79 @@ RETURNING id, created_at, updated_at`
 func (r *postgresRepository) GetByConfirmToken(ctx context.Context, token string) (*models.Subscription, error) {
 	ctx, cancel := context.WithTimeout(ctx, dbOperationTimeout)
 	defer cancel()
+	hash := tokenhash.Hash(token)
 
 	const q = `
 SELECT id, email, repo, confirmed, last_seen_tag, confirm_token, unsubscribe_token, created_at, updated_at
-FROM subscriptions WHERE confirm_token = $1`
+FROM subscriptions WHERE confirm_token = $1 OR confirm_token = $2`
 
-	return r.getByQuery(ctx, q, token)
+	return r.getByQuery(ctx, q, token, hash)
 }
 
 func (r *postgresRepository) GetByUnsubscribeToken(ctx context.Context, token string) (*models.Subscription, error) {
 	ctx, cancel := context.WithTimeout(ctx, dbOperationTimeout)
 	defer cancel()
+	hash := tokenhash.Hash(token)
 
 	const q = `
 SELECT id, email, repo, confirmed, last_seen_tag, confirm_token, unsubscribe_token, created_at, updated_at
-FROM subscriptions WHERE unsubscribe_token = $1`
+FROM subscriptions WHERE unsubscribe_token = $1 OR unsubscribe_token = $2`
 
-	return r.getByQuery(ctx, q, token)
+	return r.getByQuery(ctx, q, token, hash)
+}
+
+func (r *postgresRepository) AcquireScanLock(ctx context.Context) (release func(), acquired bool, err error) {
+	ctx, cancel := context.WithTimeout(ctx, dbOperationTimeout)
+	defer cancel()
+
+	conn, err := r.db.Conn(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+
+	if err := conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock($1)`, scannerAdvisoryLockKey).Scan(&acquired); err != nil {
+		_ = conn.Close()
+		return nil, false, err
+	}
+	if !acquired {
+		_ = conn.Close()
+		return nil, false, nil
+	}
+
+	release = func() {
+		unlockCtx, unlockCancel := context.WithTimeout(context.Background(), dbOperationTimeout)
+		defer unlockCancel()
+		_, _ = conn.ExecContext(unlockCtx, `SELECT pg_advisory_unlock($1)`, scannerAdvisoryLockKey)
+		_ = conn.Close()
+	}
+	return release, true, nil
+}
+
+func (r *postgresRepository) WasNotified(ctx context.Context, subscriptionID int64, tag string) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, dbOperationTimeout)
+	defer cancel()
+
+	const q = `
+SELECT EXISTS(
+	SELECT 1 FROM notification_log WHERE subscription_id = $1 AND tag_name = $2
+)`
+
+	var exists bool
+	if err := r.db.QueryRowContext(ctx, q, subscriptionID, tag).Scan(&exists); err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
+func (r *postgresRepository) MarkNotified(ctx context.Context, subscriptionID int64, tag string) error {
+	ctx, cancel := context.WithTimeout(ctx, dbOperationTimeout)
+	defer cancel()
+
+	_, err := r.db.ExecContext(ctx, `
+INSERT INTO notification_log (subscription_id, tag_name)
+VALUES ($1, $2)
+ON CONFLICT (subscription_id, tag_name) DO NOTHING`, subscriptionID, tag)
+	return err
 }
 
 func (r *postgresRepository) Confirm(ctx context.Context, id int64) error {
@@ -128,8 +190,8 @@ func (r *postgresRepository) UpdateLastSeenTag(ctx context.Context, id int64, ta
 	return nil
 }
 
-func (r *postgresRepository) getByQuery(ctx context.Context, query string, arg any) (*models.Subscription, error) {
-	row := r.db.QueryRowContext(ctx, query, arg)
+func (r *postgresRepository) getByQuery(ctx context.Context, query string, args ...any) (*models.Subscription, error) {
+	row := r.db.QueryRowContext(ctx, query, args...)
 	sub := &models.Subscription{}
 	if err := row.Scan(&sub.ID, &sub.Email, &sub.Repo, &sub.Confirmed, &sub.LastSeenTag, &sub.ConfirmToken, &sub.UnsubscribeToken, &sub.CreatedAt, &sub.UpdatedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) { return nil, ErrNotFound }
@@ -137,6 +199,7 @@ func (r *postgresRepository) getByQuery(ctx context.Context, query string, arg a
 	}
 	return sub, nil
 }
+
 
 func scanSubscriptions(rows *sql.Rows) ([]*models.Subscription, error) {
 	var subs []*models.Subscription

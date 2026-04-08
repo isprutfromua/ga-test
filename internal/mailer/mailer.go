@@ -2,6 +2,8 @@ package mailer
 
 import (
 	"bytes"
+	"crypto/tls"
+	"errors"
 	"fmt"
 	"html/template"
 	"net"
@@ -26,16 +28,18 @@ type ReleaseInfo struct {
 }
 
 type smtpMailer struct {
-	from string
-	addr string
-	auth smtp.Auth
+	from   string
+	addr   string
+	host   string
+	auth   smtp.Auth
+	useTLS bool
 }
 
 func New(cfg config.SMTPConfig) Mailer {
 	addr := net.JoinHostPort(cfg.Host, cfg.Port)
 	var auth smtp.Auth
 	if cfg.Username != "" { auth = smtp.PlainAuth("", cfg.Username, cfg.Password, cfg.Host) }
-	return &smtpMailer{from: cfg.From, addr: addr, auth: auth}
+	return &smtpMailer{from: cfg.From, addr: addr, host: cfg.Host, auth: auth, useTLS: cfg.UseTLS}
 }
 
 func (m *smtpMailer) SendConfirmation(email, repo, confirmURL string) error {
@@ -56,7 +60,60 @@ func (m *smtpMailer) send(to, subject, htmlBody string) error {
 	fmt.Fprintf(msg, "MIME-Version: 1.0\r\n")
 	fmt.Fprintf(msg, "Content-Type: text/html; charset=UTF-8\r\n\r\n")
 	msg.WriteString(htmlBody)
-	return smtp.SendMail(m.addr, m.auth, m.from, []string{to}, msg.Bytes())
+
+	conn, err := net.Dial("tcp", m.addr)
+	if err != nil {
+		return err
+	}
+
+	client, err := smtp.NewClient(conn, m.host)
+	if err != nil {
+		_ = conn.Close()
+		return err
+	}
+	defer client.Close()
+
+	if m.useTLS {
+		ok, _ := client.Extension("STARTTLS")
+		if !ok {
+			return errors.New("smtp server does not support STARTTLS")
+		}
+		if err := client.StartTLS(&tls.Config{MinVersion: tls.VersionTLS12, ServerName: m.host}); err != nil {
+			return err
+		}
+	}
+
+	if m.auth != nil {
+		if ok, _ := client.Extension("AUTH"); !ok {
+			return errors.New("smtp server does not support AUTH")
+		}
+		if err := client.Auth(m.auth); err != nil {
+			return err
+		}
+	}
+
+	if err := client.Mail(m.from); err != nil {
+		return err
+	}
+	if err := client.Rcpt(to); err != nil {
+		return err
+	}
+	writer, err := client.Data()
+	if err != nil {
+		return err
+	}
+	if _, err := writer.Write(msg.Bytes()); err != nil {
+		_ = writer.Close()
+		return err
+	}
+	if err := writer.Close(); err != nil {
+		return err
+	}
+
+	if err := client.Quit(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func render(title, body, url string) string {

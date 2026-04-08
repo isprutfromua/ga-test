@@ -78,6 +78,11 @@ func (f *fakeRepo) GetByEmail(context.Context, string) ([]*models.Subscription, 
 
 func (f *fakeRepo) GetAllConfirmed(context.Context) ([]*models.Subscription, error) { return []*models.Subscription{}, nil }
 func (f *fakeRepo) UpdateLastSeenTag(context.Context, int64, string) error          { return nil }
+func (f *fakeRepo) AcquireScanLock(context.Context) (func(), bool, error) {
+	return func() {}, true, nil
+}
+func (f *fakeRepo) WasNotified(context.Context, int64, string) (bool, error) { return false, nil }
+func (f *fakeRepo) MarkNotified(context.Context, int64, string) error        { return nil }
 
 type fakeGitHub struct {
 	repoExistsErr error

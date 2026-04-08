@@ -3,6 +3,7 @@ package scanner
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,12 @@ type fakeRepo struct {
 	getAllConfirmedSubs []*models.Subscription
 	getAllConfirmedErr  error
 	updateLastSeenErr   error
+	acquireLockErr      error
+	lockAcquired        bool
+	acquireLockCalls    int
+	wasNotifiedErr      error
+	markNotifiedErr     error
+	notificationLog     map[string]bool
 
 	updateCalls []updateCall
 }
@@ -50,14 +57,42 @@ func (f *fakeRepo) UpdateLastSeenTag(_ context.Context, id int64, tag string) er
 	f.updateCalls = append(f.updateCalls, updateCall{id: id, tag: tag})
 	return f.updateLastSeenErr
 }
+func (f *fakeRepo) AcquireScanLock(context.Context) (func(), bool, error) {
+	f.acquireLockCalls++
+	if f.acquireLockErr != nil {
+		return nil, false, f.acquireLockErr
+	}
+	return func() {}, f.lockAcquired, nil
+}
+func (f *fakeRepo) WasNotified(_ context.Context, subscriptionID int64, tag string) (bool, error) {
+	if f.wasNotifiedErr != nil {
+		return false, f.wasNotifiedErr
+	}
+	if f.notificationLog == nil {
+		return false, nil
+	}
+	return f.notificationLog[notificationKey(subscriptionID, tag)], nil
+}
+func (f *fakeRepo) MarkNotified(_ context.Context, subscriptionID int64, tag string) error {
+	if f.markNotifiedErr != nil {
+		return f.markNotifiedErr
+	}
+	if f.notificationLog == nil {
+		f.notificationLog = map[string]bool{}
+	}
+	f.notificationLog[notificationKey(subscriptionID, tag)] = true
+	return nil
+}
 
 type fakeGitHub struct {
 	latestRelease    *models.GitHubRelease
 	latestReleaseErr error
+	latestCalls      int
 }
 
 func (f *fakeGitHub) RepoExists(context.Context, string) error { return nil }
 func (f *fakeGitHub) LatestRelease(context.Context, string) (*models.GitHubRelease, error) {
+	f.latestCalls++
 	if f.latestReleaseErr != nil {
 		return nil, f.latestReleaseErr
 	}
@@ -90,7 +125,34 @@ func TestNewDefaultsWorkersToOne(t *testing.T) {
 }
 
 func TestScanGetAllConfirmedError(t *testing.T) {
-	repo := &fakeRepo{getAllConfirmedErr: errors.New("db down")}
+	repo := &fakeRepo{getAllConfirmedErr: errors.New("db down"), lockAcquired: true}
+	m := newTestMetrics()
+	s := &Scanner{repo: repo, github: &fakeGitHub{}, mailer: &fakeMailer{}, metrics: m, baseURL: "http://example.com", workers: 1}
+
+	s.scan(context.Background())
+
+	if got := counterValue(t, m.ScanErrors); got != 1 {
+		t.Fatalf("ScanErrors = %v, want 1", got)
+	}
+}
+
+func TestScanLockNotAcquiredSkipsCycle(t *testing.T) {
+	repo := &fakeRepo{lockAcquired: false, getAllConfirmedSubs: []*models.Subscription{{ID: 1, Repo: "owner/repo"}}}
+	m := newTestMetrics()
+	s := &Scanner{repo: repo, github: &fakeGitHub{latestRelease: &models.GitHubRelease{TagName: "v1.0.0"}}, mailer: &fakeMailer{}, metrics: m, baseURL: "http://example.com", workers: 1}
+
+	s.scan(context.Background())
+
+	if repo.acquireLockCalls != 1 {
+		t.Fatalf("AcquireScanLock calls = %d, want 1", repo.acquireLockCalls)
+	}
+	if got := counterValue(t, m.ScanErrors); got != 0 {
+		t.Fatalf("ScanErrors = %v, want 0", got)
+	}
+}
+
+func TestScanLockErrorIncrementsScanErrors(t *testing.T) {
+	repo := &fakeRepo{acquireLockErr: errors.New("lock unavailable")}
 	m := newTestMetrics()
 	s := &Scanner{repo: repo, github: &fakeGitHub{}, mailer: &fakeMailer{}, metrics: m, baseURL: "http://example.com", workers: 1}
 
@@ -164,6 +226,13 @@ func TestCheckRepo(t *testing.T) {
 			wantUpdateCalls: 0,
 		},
 		{
+			name:            "already notified is ignored",
+			release:         &models.GitHubRelease{TagName: "v1.1.0"},
+			lastTag:         "v1.0.0",
+			wantMailCalls:   0,
+			wantUpdateCalls: 0,
+		},
+		{
 			name:                 "mailer error increments email errors",
 			release:              &models.GitHubRelease{TagName: "v1.1.0", Name: "release"},
 			mailerErr:            errors.New("smtp down"),
@@ -195,12 +264,20 @@ func TestCheckRepo(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			repo := &fakeRepo{updateLastSeenErr: tt.updateErr}
+			if tt.name == "already notified is ignored" {
+				repo.notificationLog = map[string]bool{notificationKey(42, "v1.1.0"): true}
+			}
 			gh := &fakeGitHub{latestRelease: tt.release, latestReleaseErr: tt.githubErr}
 			m := &fakeMailer{sendErr: tt.mailerErr}
 			met := newTestMetrics()
 			s := &Scanner{repo: repo, github: gh, mailer: m, metrics: met, baseURL: "http://example.com", workers: 1}
 
-			s.checkRepo(context.Background(), 42, "user@example.com", "owner/repo", "token-123", tt.lastTag)
+			s.checkRepo(context.Background(), "owner/repo", []subscriptionWork{{
+				id:       42,
+				email:    "user@example.com",
+				unsubTok: "token-123",
+				lastTag:  tt.lastTag,
+			}})
 
 			if got := counterValue(t, met.EmailsSent); got != tt.wantEmailsSent {
 				t.Fatalf("EmailsSent = %v, want %v", got, tt.wantEmailsSent)
@@ -235,11 +312,37 @@ func TestCheckRepo(t *testing.T) {
 	}
 }
 
+func TestScanDoesNotDuplicateAfterUpdateFailure(t *testing.T) {
+	repo := &fakeRepo{getAllConfirmedSubs: []*models.Subscription{{
+		ID:               1,
+		Email:            "a@example.com",
+		Repo:             "owner/repo",
+		UnsubscribeToken: "t1",
+		LastSeenTag:      "v1.0.0",
+	}}, updateLastSeenErr: errors.New("db down"), lockAcquired: true}
+
+	gh := &fakeGitHub{latestRelease: &models.GitHubRelease{TagName: "v2.0.0", Name: "rel"}}
+	m := &fakeMailer{}
+	met := newTestMetrics()
+	s := &Scanner{repo: repo, github: gh, mailer: m, metrics: met, baseURL: "http://example.com", workers: 1}
+
+	s.scan(context.Background())
+	s.scan(context.Background())
+
+	if len(m.sent) != 1 {
+		t.Fatalf("emails sent calls = %d, want 1", len(m.sent))
+	}
+}
+
+func notificationKey(subscriptionID int64, tag string) string {
+	return fmt.Sprintf("%d:%s", subscriptionID, tag)
+}
+
 func TestScanProcessesSubscriptions(t *testing.T) {
 	repo := &fakeRepo{getAllConfirmedSubs: []*models.Subscription{
 		{ID: 1, Email: "a@example.com", Repo: "owner/repo", UnsubscribeToken: "t1", LastSeenTag: "v1.0.0"},
 		{ID: 2, Email: "b@example.com", Repo: "owner/repo", UnsubscribeToken: "t2", LastSeenTag: "v1.0.0"},
-	}}
+	}, lockAcquired: true}
 
 	gh := &fakeGitHub{latestRelease: &models.GitHubRelease{TagName: "v2.0.0", Name: "rel"}}
 	m := &fakeMailer{}
@@ -250,6 +353,9 @@ func TestScanProcessesSubscriptions(t *testing.T) {
 
 	if len(m.sent) != 2 {
 		t.Fatalf("emails sent calls = %d, want 2", len(m.sent))
+	}
+	if gh.latestCalls != 1 {
+		t.Fatalf("LatestRelease calls = %d, want 1", gh.latestCalls)
 	}
 	if len(repo.updateCalls) != 2 {
 		t.Fatalf("update calls = %d, want 2", len(repo.updateCalls))
