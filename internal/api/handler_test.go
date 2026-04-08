@@ -233,12 +233,9 @@ func TestAPIKeyMiddleware(t *testing.T) {
 		apiKey     string
 		wantStatus int
 	}{
-		{name: "health is public", method: http.MethodGet, path: "/healthz", wantStatus: http.StatusNoContent},
-		{name: "metrics is public", method: http.MethodGet, path: "/metrics", wantStatus: http.StatusNoContent},
-		{name: "root get is public", method: http.MethodGet, path: "/", wantStatus: http.StatusNoContent},
-		{name: "public confirm route", method: http.MethodGet, path: "/api/confirm/token", wantStatus: http.StatusNoContent},
-		{name: "protected without key", method: http.MethodPost, path: "/api/subscribe", wantStatus: http.StatusUnauthorized},
-		{name: "protected with key", method: http.MethodPost, path: "/api/subscribe", apiKey: "secret", wantStatus: http.StatusNoContent},
+		{name: "missing key is unauthorized", method: http.MethodPost, path: "/api/subscribe", wantStatus: http.StatusUnauthorized},
+		{name: "wrong key is unauthorized", method: http.MethodPost, path: "/api/subscribe", apiKey: "wrong", wantStatus: http.StatusUnauthorized},
+		{name: "matching key is authorized", method: http.MethodPost, path: "/api/subscribe", apiKey: "secret", wantStatus: http.StatusNoContent},
 	}
 
 	for _, tt := range tests {

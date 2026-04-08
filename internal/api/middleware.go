@@ -2,7 +2,6 @@ package api
 
 import (
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -13,7 +12,7 @@ import (
 func APIKeyMiddleware(expected string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if expected == "" || strings.HasPrefix(r.URL.Path, "/metrics") || r.URL.Path == "/healthz" || (r.Method == http.MethodGet && r.URL.Path == "/") || isPublicTokenRoute(r) {
+			if expected == "" {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -24,13 +23,6 @@ func APIKeyMiddleware(expected string) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
-}
-
-func isPublicTokenRoute(r *http.Request) bool {
-	if r.Method != http.MethodGet {
-		return false
-	}
-	return strings.HasPrefix(r.URL.Path, "/api/confirm/") || strings.HasPrefix(r.URL.Path, "/api/unsubscribe/")
 }
 
 func MetricsMiddleware(m *metrics.Metrics) func(http.Handler) http.Handler {

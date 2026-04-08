@@ -13,16 +13,19 @@ func NewRouter(h *Handler, met *metrics.Metrics, apiKey, staticDir string) http.
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.RequestID)
 	r.Use(MetricsMiddleware(met))
-	r.Use(APIKeyMiddleware(apiKey))
 
 	r.Get("/healthz", HealthHandler)
 	r.Handle("/metrics", MetricsHandler())
 
 	r.Route("/api", func(api chi.Router) {
-		api.Post("/subscribe", h.Subscribe)
+		api.Group(func(protected chi.Router) {
+			protected.Use(APIKeyMiddleware(apiKey))
+			protected.Post("/subscribe", h.Subscribe)
+			protected.Get("/subscriptions", h.GetSubscriptions)
+		})
+
 		api.Get("/confirm/{token}", h.ConfirmSubscription)
 		api.Get("/unsubscribe/{token}", h.Unsubscribe)
-		api.Get("/subscriptions", h.GetSubscriptions)
 	})
 
 	r.Handle("/*", http.FileServer(http.Dir(staticDir)))
