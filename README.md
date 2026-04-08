@@ -1,221 +1,69 @@
 # GitHub Release Notifier
 
-Go service that tracks GitHub repositories and emails subscribers when a new stable release is published.
+Service that tracks GitHub repositories and emails subscribers when a new stable release appears.
 
-Users can subscribe from a static web UI or via HTTP API, confirm via tokenized email link, and later unsubscribe with a dedicated tokenized link.
+## Overview
 
-## 1. Project Overview
+Main flow:
 
-The application runs as a single Go service with:
+1. User subscribes with email + owner/repo.
+2. Service validates repository and stores unconfirmed subscription.
+3. User confirms via tokenized link.
+4. Background scanner checks releases and sends notifications for new stable tags.
 
-- HTTP API and static frontend served by the same process.
-- PostgreSQL for subscription persistence.
-- Redis for GitHub API response caching.
-- SMTP integration for confirmation and notification emails.
-- Background scanner that polls GitHub releases on an interval.
-- Prometheus metrics endpoint for observability.
+Tech stack:
 
-Main runtime flow:
+- Go 1.23
+- chi v5 (HTTP routing/middleware)
+- PostgreSQL + pgx stdlib (persistence)
+- Redis (GitHub response cache)
+- SMTP / CloudMailin (email transport)
+- Prometheus client (metrics)
+- Docker + docker compose (local/dev)
+- GitHub Actions CI + Heroku auto-deploy
 
-1. User submits email + repository.
-2. Service validates repo format and existence on GitHub.
-3. Subscription is persisted as unconfirmed and confirmation email is queued.
-4. User confirms via token link.
-5. Scanner periodically checks confirmed subscriptions and sends notification emails for new stable tags.
-
-## 2. Tech Stack
-
-- Language: Go 1.23
-- HTTP Router/Middleware: chi v5
-- Database: PostgreSQL 16 (in local compose)
-- DB Driver: pgx stdlib
-- Cache: Redis 7 (in local compose)
-- Metrics: Prometheus Go client
-- Mail testing (local): Mailpit
-- Containerization: Docker multi-stage build + distroless runtime image
-- CI: GitHub Actions workflow at .github/workflows/ci.yml
-
-## 3. Project Structure
-
-Current repository tree (relevant files):
-
-```text
-.
-├── .github/
-│   └── workflows/
-│       └── ci.yml
-├── cmd/
-│   └── server/
-│       └── main.go
-├── internal/
-│   ├── api/
-│   │   ├── contract_test.go
-│   │   ├── handler.go
-│   │   ├── handler_test.go
-│   │   ├── middleware.go
-│   │   └── router.go
-│   ├── cache/
-│   │   └── redis.go
-│   ├── config/
-│   │   └── config.go
-│   ├── db/
-│   │   ├── db.go
-│   │   └── migrations/
-│   │       └── 000001_initial.up.sql
-│   ├── github/
-│   │   ├── client.go
-│   │   └── client_test.go
-│   ├── mailer/
-│   │   ├── mailer.go
-│   │   └── mailer_test.go
-│   ├── metrics/
-│   │   └── metrics.go
-│   ├── models/
-│   │   └── models.go
-│   ├── repository/
-│   │   ├── subscription.go
-│   │   └── subscription_test.go
-│   ├── scanner/
-│   │   ├── scanner.go
-│   │   └── scanner_test.go
-│   └── service/
-│       ├── subscription.go
-│       └── subscription_test.go
-├── static/
-│   ├── error.html
-│   ├── index.html
-│   └── subscription.html
-├── .env.example
-├── Dockerfile
-├── README.md
-├── docker-compose.yml
-├── go.mod
-├── go.sum
-├── handler.go
-├── index.html
-├── scanner.go
-└── subscription.go
-```
-
-Module responsibilities:
-
-- cmd/server: application bootstrap and graceful shutdown.
-- internal/config: environment loading, defaults, and required variable checks.
-- internal/db: database connection setup and SQL migration execution on startup.
-- internal/repository: PostgreSQL data access for subscriptions.
-- internal/github: GitHub API client, repo validation, and release lookup with Redis cache.
-- internal/service: business logic, token generation, confirmation mail queue workers.
-- internal/scanner: periodic release scanning with bounded worker pool.
-- internal/api: HTTP handlers, auth middleware, metrics middleware, route wiring.
-- internal/mailer: SMTP email delivery for confirmation and release notifications.
-- internal/metrics: Prometheus instruments registration.
-- static: browser UI pages and state pages.
-
-Note on root files:
-
-- handler.go, scanner.go, subscription.go at repository root are marked with go:build ignore and are not compiled into runtime binaries.
-
-## 4. Installation and Setup
+## Installation and Setup
 
 Prerequisites:
 
 - Docker
 - Docker Compose plugin
 
-Local setup:
+Run locally:
 
 ```bash
 cp .env.example .env
 docker compose up --build
 ```
 
-Default local endpoints:
+Required environment variables:
+
+- API_KEY
+- DATABASE_URL
+- SMTP_FROM
+
+Local endpoints:
 
 - App: http://localhost:8080
 - Health: http://localhost:8080/healthz
 - Metrics: http://localhost:8080/metrics
-- Mailpit UI: http://localhost:8025
+- Mailpit: http://localhost:8025
 
-Deployed website (Production):
+## API Endpoints
 
-- App: https://ga-test-app-82466e574c85.herokuapp.com/
-- Metrics: https://ga-test-app-82466e574c85.herokuapp.com/metrics
-- Swagger Editor: https://editor.swagger.io/?url=https://raw.githubusercontent.com/isprutfromua/ga-test/main/swagger.yaml
+Protected (require `X-API-Key`):
 
-## 5. Development Workflow
+- `POST /api/subscribe`
+- `GET /api/subscriptions?email=...`
 
-Recommended flow:
+Public:
 
-1. Start dependencies and app with docker compose.
-2. Make code changes in internal modules.
-3. Run lint and tests locally:
+- `GET /api/confirm/{token}`
+- `GET /api/unsubscribe/{token}`
+- `GET /healthz`
+- `GET /metrics`
 
-```bash
-golangci-lint run --timeout=3m
-go test ./...
-```
-
-4. Install repository Git hooks (one-time) to run tests before every push:
-
-```bash
-git config core.hooksPath .githooks
-```
-
-If hooks do not run on push, verify:
-
-```bash
-git config --get core.hooksPath
-```
-
-Expected: `.githooks`
-
-5. Run focused contract checks before opening PR:
-
-```bash
-go test ./internal/api -run 'TestSwaggerContractStatusMatrix|TestAuthBoundaries'
-```
-
-6. Open PR and let GitHub Actions run the same checks.
-
-Using the deployed website:
-
-1. Open https://ga-test-app-82466e574c85.herokuapp.com/
-2. On first visit, you will be prompted to enter the API key (from your Heroku app config).
-   - The key is stored securely in your browser cookie and persists across sessions.
-   - You can update it anytime using the "Set API key" button near the lookup section.
-3. Submit your email and GitHub repository in owner/repo format.
-4. Open the confirmation email and follow the confirmation link.
-5. Use the "Your subscriptions" lookup to view and manage subscriptions — requires a valid API key.
-6. Keep the unsubscribe link from any received email to stop notifications later.
-
-Local browser test flow (Docker compose + Mailpit):
-
-1. Open http://localhost:8080
-2. Enter your email and repository in owner/repo format.
-3. Click Subscribe.
-4. Open http://localhost:8025 and find the confirmation email.
-5. Open the confirmation link to confirm the subscription.
-6. Return to the home page at http://localhost:8080.
-7. Use the subscription lookup by email to verify the subscribed repositories are listed.
-
-Using the deployed API:
-
-```bash
-curl -X POST https://ga-test-app-82466e574c85.herokuapp.com/api/subscribe \
-  -H "X-API-Key: <HEROKU_API_KEY>" \
-  -d "email=you@example.com&repo=golang/go"
-
-curl "https://ga-test-app-82466e574c85.herokuapp.com/api/subscriptions?email=you@example.com" \
-  -H "X-API-Key: <HEROKU_API_KEY>"
-```
-
-Current email delivery status:
-
-- Outbound SMTP is configured through CloudMailin and messages are accepted by CloudMailin.
-- Final delivery to recipient inboxes is not working yet because DNS records for the sending domain are not fully configured.
-- Until DNS is fixed (SPF/DKIM/return-path as required by CloudMailin/domain provider), email flow is effectively limited to CloudMailin processing.
-
-Useful API calls:
+Example local calls:
 
 ```bash
 curl -X POST http://localhost:8080/api/subscribe \
@@ -229,188 +77,92 @@ curl "http://localhost:8080/api/confirm/<token>"
 curl "http://localhost:8080/api/unsubscribe/<token>"
 ```
 
-Protected endpoints:
+## How to Test Local
 
-- POST /api/subscribe
-- GET /api/subscriptions
+1. Start stack with docker compose.
+2. Open app at http://localhost:8080 and set valid API key (env variable).
+3. Subscribe with email + repo.
+4. Open Mailpit at http://localhost:8025 and click confirmation link.
+5. Verify subscription list using UI lookup or `GET /api/subscriptions`.
 
-Public endpoints:
-
-- GET /api/confirm/{token}
-- GET /api/unsubscribe/{token}
-- GET /healthz
-- GET /metrics
-
-## 6. Environment Configuration
-
-Primary environment template: .env.example
-
-Required variables (enforced in config loader):
-
-- API_KEY
-- DATABASE_URL
-- SMTP_FROM
-
-SMTP transport configuration:
-
-- Preferred on Heroku with CloudMailin add-on: `CLOUDMAILIN_SMTP_URL` (auto-injected by Heroku).
-- Fallback/manual SMTP: `SMTP_HOST` (required when `CLOUDMAILIN_SMTP_URL` is not set), plus optional `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_TLS`.
-
-Important optional variables:
-
-- GITHUB_TOKEN: strongly recommended for higher GitHub API rate limits.
-- BASE_URL: used when constructing confirmation/unsubscribe links in emails.
-- SCANNER_INTERVAL, SCANNER_WORKERS: controls scanner cadence and concurrency.
-- GITHUB_CACHE_TTL: Redis cache TTL for GitHub responses.
-- REDIS_URL: preferred on Heroku and other managed Redis services; supports `redis://` and `rediss://`.
-- REDIS_TLS_URL: if present, takes precedence over REDIS_URL and is recommended for Heroku Redis TLS.
-- REDIS_TLS_SERVER_NAME: optional TLS SNI/hostname override for certificate validation.
-- REDIS_TLS_INSECURE_SKIP_VERIFY: set to true only as a temporary workaround when provider CA chains are unavailable in runtime trust store.
-
-Heroku + CloudMailin notes:
-
-- CloudMailin exposes `CLOUDMAILIN_SMTP_URL` in format like `smtp://usr:pswd@host.name.example.net:587?starttls=true`.
-- The app parses this URL automatically and uses it for outbound emails.
-- `SMTP_FROM` is still required and should be set to your sender address.
-
-Docker compose overrides to use container hostnames:
-
-- DOCKER_DATABASE_URL
-- DOCKER_REDIS_ADDR
-- DOCKER_SMTP_HOST
-
-## 7. Linting and Code Quality
-
-Linting is configured via `.golangci.yml` using golangci-lint v2 schema.
-
-Enabled linters:
-
-- govet
-- ineffassign
-- staticcheck
-
-To run the same lint check locally:
-
-```bash
-golangci-lint run --timeout=3m
-```
-
-Practical quality checks currently available:
+Code quality checks:
 
 ```bash
 golangci-lint run --timeout=3m
 go test ./...
 go test -race -count=1 ./...
-go vet ./...
 ```
 
-## 8. Testing and Checkers
-
-Present test coverage includes:
-
-- API handler and contract tests in internal/api
-- GitHub client tests in internal/github
-- Mailer tests in internal/mailer
-- Repository tests in internal/repository
-- Scanner tests in internal/scanner
-- Service tests in internal/service
-
-Run all tests:
+Focused contract checks:
 
 ```bash
-go test ./...
+go test ./internal/api -run 'TestSwaggerContractStatusMatrix|TestAuthBoundaries'
 ```
 
-Run with race detector:
+## How to Test in Prod
+
+App URLs:
+
+- App: https://ga-test-app-82466e574c85.herokuapp.com/
+- Metrics: https://ga-test-app-82466e574c85.herokuapp.com/metrics
+- Swagger view: https://editor.swagger.io/?url=https://raw.githubusercontent.com/isprutfromua/ga-test/main/swagger.yaml
+
+Manual prod smoke test:
+
+1. Open app and set valid API key (env variable).
+2. Submit subscription.
+3. Confirm via email link.
+4. Check subscription lookup.
+5. Optionally verify metrics endpoint is reachable.
+
+Prod API check:
 
 ```bash
-go test -race -count=1 ./...
+curl -X POST https://ga-test-app-82466e574c85.herokuapp.com/api/subscribe \
+  -H "X-API-Key: <API_KEY>" \
+  -d "email=you@example.com&repo=golang/go"
+
+curl "https://ga-test-app-82466e574c85.herokuapp.com/api/subscriptions?email=you@example.com" \
+  -H "X-API-Key: <API_KEY>"
 ```
 
-Run coverage:
+Note: SMTP messages are accepted by CloudMailin, but inbox delivery is currently limited until sender-domain DNS (SPF/DKIM/return-path) is fully configured.
 
-```bash
-go test -coverprofile=coverage.out ./...
-go tool cover -html=coverage.out
-```
+## High Level Structure
 
-Contract safety checks:
+- `cmd/server`: bootstrap + graceful shutdown.
+  Keep runtime wiring in one entrypoint for predictable startup and deploy behavior.
+- `internal/api`: HTTP handlers, middleware, router.
+  Isolate transport concerns from business logic.
+- `internal/service`: subscription business rules, tokens, async work.
+  Central place for use cases and orchestration.
+- `internal/repository`: PostgreSQL data access.
+  Keep SQL/storage concerns separate and testable.
+- `internal/github`: GitHub client + repo/release checks (with Redis cache support).
+  Hide third-party API details behind internal abstraction.
+- `internal/scanner`: periodic release polling with worker pool.
+  Bounded concurrency to reduce risk of API spikes.
+- `internal/mailer`: email sending implementation.
+  Isolate provider/config specifics from core logic.
+- `internal/config`, `internal/db`, `internal/metrics`: shared infrastructure modules.
+  Explicit infrastructure boundaries improve maintainability.
+- `static`: browser UI pages served by same process.
+  Single binary deploy (API + UI) keeps operations simple.
 
-- TestSwaggerContractStatusMatrix
-- TestAuthBoundaries
+## Deployments / Monitoring / Automation
 
-These are executed in CI via internal/api/contract_test.go.
+Deployments:
 
-## 9. CI/CD Pipelines
-
-CI exists via .github/workflows/ci.yml.
-
-Trigger:
-
-- push
-- pull_request
-
-Pipeline stages currently implemented:
-
-1. Run lint job with golangci-lint
-2. Run contract-focused API tests
-3. Run full go test ./...
-
-The CI workflow uses Node 24-compatible GitHub Actions versions and the golangci-lint v2 configuration in `.golangci.yml`.
-
-On CI success, Heroku automatically deploys the latest push to the `main` branch.
-
-## 10. Deployment Process
-
-Current deployment automation:
-
-- **Auto-deploy to Heroku**: The app is connected to GitHub and automatically deploys whenever changes are pushed to the `main` branch.
-- Build and test steps run via GitHub Actions CI before any changes are deployed.
-
-Heroku deployment flow:
-
-1. Push changes to `main` branch on GitHub.
-2. GitHub Actions runs lint and test suite.
-3. On CI success, Heroku automatically detects the push and rebuilds the image.
-4. New dyno processes start with updated code and current environment variables.
-5. Zero-downtime deployment (old dyno drains connections before shutdown).
-
-Alternatively, manual deployment strategy with existing assets:
-
-1. Build image with Dockerfile.
-2. Provide runtime environment variables.
-3. Run app container together with Postgres and Redis (or managed equivalents).
-
-Example (single host using compose file as baseline):
-
-```bash
-docker compose up -d --build
-```
-
-For production hardening, ensure:
-
-- Strong API_KEY.
-- Valid SMTP credentials.
-- Persistent PostgreSQL storage.
-- Restricted network exposure for Redis/PostgreSQL.
-
-## 11. Monitoring and Logging
+- GitHub Actions runs lint + tests on push/PR.
+- Heroku auto-deploys updates from `main` after CI passes.
 
 Monitoring:
 
-- Prometheus metrics exposed on GET /metrics.
-- Metrics include subscription lifecycle, scan duration/errors, GitHub request outcomes, email send outcomes, and HTTP request latency.
+- Prometheus metrics at `/metrics` (HTTP latency, scan results, GitHub calls, email outcomes, subscription lifecycle).
+- Health endpoint at `/healthz`.
 
-Logging:
+Automation:
 
-- Application uses standard library logging and prints operational errors/events.
-- No structured logging stack or log shipping configuration is defined in this repository.
-
-## 12. Scripts and Automation
-
-Repository automation currently available:
-
-- Dockerfile for container image build.
-- docker-compose.yml for local multi-service orchestration.
-- GitHub Actions workflow for CI test automation.
-- Git pre-push hook at .githooks/pre-push (runs go test ./... and blocks push on failure).
+- `.github/workflows/ci.yml` for CI.
+- `.githooks/pre-push` runs `go test ./...`.
+- Dockerfile + `docker-compose.yml` provide reproducible local/prod-like setup.
