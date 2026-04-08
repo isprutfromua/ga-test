@@ -2,6 +2,8 @@
 
 Service that tracks GitHub repositories and emails subscribers when a new stable release appears.
 
+ ![UI](./ui.png) 
+
 ## Overview
 
 Main flow:
