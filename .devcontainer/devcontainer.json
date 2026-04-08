@@ -10,7 +10,8 @@
 		"target": "build"
 	},
 	"features": {
-		"ghcr.io/devcontainers/features/docker-in-docker:2": {}
+		"ghcr.io/devcontainers/features/docker-in-docker:2": {},
+		"ghcr.io/guiyomh/features/golangci-lint:0": {}
 	}
 
 	// Features to add to the dev container. More info: https://containers.dev/features.

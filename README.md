@@ -223,13 +223,19 @@ Docker compose overrides to use container hostnames:
 
 ## 7. Linting and Code Quality
 
-Linting is configured via `.golangci.yml`.
+Linting is configured via `.golangci.yml` using golangci-lint v2 schema.
 
 Enabled linters:
 
 - govet
 - ineffassign
 - staticcheck
+
+To run the same lint check locally:
+
+```bash
+golangci-lint run --timeout=3m
+```
 
 Practical quality checks currently available:
 
@@ -291,6 +297,8 @@ Pipeline stages currently implemented:
 1. Run lint job with golangci-lint
 2. Run contract-focused API tests
 3. Run full go test ./...
+
+The CI workflow uses Node 24-compatible GitHub Actions versions and the golangci-lint v2 configuration in `.golangci.yml`.
 
 Important: there is no CD stage in the repository workflow today (no image publish and no remote deployment step).
 
