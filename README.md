@@ -103,6 +103,11 @@ go test ./internal/api -run 'TestSwaggerContractStatusMatrix|TestAuthBoundaries'
 
 ## How to Test in Prod
 
+This app is configured to run on a schedule to optimize Heroku dyno usage.
+- Schedule: Weekdays, 10:00 AM – 6:00 PM (Kyiv Time).
+- Automation: Managed via GitHub Actions.
+- Manual Control: You can manually scale the dynos by going to Actions → Manual and Scheduled Scaling → Run workflow.
+
 App URLs:
 
 - App: https://ga-test-app-82466e574c85.herokuapp.com/
