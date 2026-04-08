@@ -60,7 +60,7 @@ func (m *smtpMailer) send(to, subject, htmlBody string) error {
 }
 
 func render(title, body, url string) string {
-	tpl := template.Must(template.New("mail").Parse(`<html><body><h1>{{.Title}}</h1><p>{{.Body}}</p><p><a href="{{.URL}}">{{.URL}}</a></p></body></html>`))
+	tpl := template.Must(template.New("mail").Parse(`<html><body><h1>{{.Title}}</h1><p>{{.Body}}</p><p><a href="{{.URL}}" style="display:inline-block;padding:10px 16px;background:#0b5ed7;color:#ffffff;text-decoration:none;border-radius:6px;">Confirm subscription</a></p></body></html>`))
 	var buf bytes.Buffer
 	_ = tpl.Execute(&buf, map[string]string{"Title": title, "Body": body, "URL": url})
 	return buf.String()
