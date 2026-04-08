@@ -6,12 +6,19 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"time"
 
 	ghclient "github.com/isprutfromua/ga-test/internal/github"
 	"github.com/isprutfromua/ga-test/internal/mailer"
 	"github.com/isprutfromua/ga-test/internal/metrics"
 	"github.com/isprutfromua/ga-test/internal/models"
 	"github.com/isprutfromua/ga-test/internal/repository"
+)
+
+const (
+	confirmationWorkers   = 4
+	confirmationQueueSize = 256
+	repoExistsTimeout     = 8 * time.Second
 )
 
 var (
@@ -35,15 +42,47 @@ type subscriptionService struct {
 	mailer  mailer.Mailer
 	metrics *metrics.Metrics
 	baseURL string
+	mailQ   chan confirmationJob
 }
 
 func NewSubscriptionService(repo repository.SubscriptionRepository, github ghclient.Client, m mailer.Mailer, met *metrics.Metrics, baseURL string) SubscriptionService {
-	return &subscriptionService{repo: repo, github: github, mailer: m, metrics: met, baseURL: baseURL}
+	s := &subscriptionService{
+		repo:    repo,
+		github:  github,
+		mailer:  m,
+		metrics: met,
+		baseURL: baseURL,
+		mailQ:   make(chan confirmationJob, confirmationQueueSize),
+	}
+
+	for i := 0; i < confirmationWorkers; i++ {
+		go s.runConfirmationWorker()
+	}
+
+	return s
+}
+
+type confirmationJob struct {
+	email      string
+	repo       string
+	confirmURL string
+}
+
+func (s *subscriptionService) runConfirmationWorker() {
+	for job := range s.mailQ {
+		if err := s.mailer.SendConfirmation(job.email, job.repo, job.confirmURL); err != nil {
+			s.metrics.EmailErrors.Inc()
+			continue
+		}
+		s.metrics.EmailsSent.Inc()
+	}
 }
 
 func (s *subscriptionService) Subscribe(ctx context.Context, email, repo string) error {
 	if err := ghclient.ValidateRepoFormat(repo); err != nil { return ErrInvalidRepo }
-	if err := s.github.RepoExists(ctx, repo); err != nil { return err }
+	repoCtx, cancel := context.WithTimeout(ctx, repoExistsTimeout)
+	defer cancel()
+	if err := s.github.RepoExists(repoCtx, repo); err != nil { return err }
 	confirmToken, err := generateToken()
 	if err != nil { return fmt.Errorf("generating confirm token: %w", err) }
 	unsubToken, err := generateToken()
@@ -51,14 +90,15 @@ func (s *subscriptionService) Subscribe(ctx context.Context, email, repo string)
 	sub := &models.Subscription{Email: email, Repo: repo, Confirmed: false, LastSeenTag: "", ConfirmToken: confirmToken, UnsubscribeToken: unsubToken}
 	if err := s.repo.Create(ctx, sub); err != nil { return err }
 	s.metrics.SubscriptionsTotal.Inc()
-	go func() {
-		confirmURL := fmt.Sprintf("%s/api/confirm/%s", s.baseURL, confirmToken)
-		if err := s.mailer.SendConfirmation(email, repo, confirmURL); err != nil {
-			s.metrics.EmailErrors.Inc()
-			return
-		}
-		s.metrics.EmailsSent.Inc()
-	}()
+
+	confirmURL := fmt.Sprintf("%s/api/confirm/%s", s.baseURL, confirmToken)
+	select {
+	case s.mailQ <- confirmationJob{email: email, repo: repo, confirmURL: confirmURL}:
+	default:
+		// Queue saturation is treated as a delivery failure while preserving API contract.
+		s.metrics.EmailErrors.Inc()
+	}
+
 	return nil
 }
 
