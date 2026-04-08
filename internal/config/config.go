@@ -1,9 +1,11 @@
 package config
 
 import (
+	"net/url"
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -33,6 +35,7 @@ type RedisConfig struct {
 	Addr     string
 	Password string
 	DB       int
+	UseTLS   bool
 	TTL      time.Duration
 }
 
@@ -80,18 +83,40 @@ func Load() (*Config, error) {
 	if err != nil { return nil, err }
 	workers, err := intEnv("SCANNER_WORKERS", 5)
 	if err != nil { return nil, err }
+	redisCfg, err := loadRedisConfig(redisDB, ttl)
+	if err != nil { return nil, err }
 	return &Config{
 		BaseURL:        getenv("BASE_URL", "http://localhost:8080"),
 		StaticDir:      getenv("STATIC_DIR", "./static"),
 		MigrationsPath: getenv("MIGRATIONS_PATH", "./internal/db/migrations"),
 		Server: ServerConfig{Port: getenv("PORT", "8080"), ReadTimeout: readTimeout, WriteTimeout: writeTimeout, IdleTimeout: idleTimeout},
 		Database: DatabaseConfig{URL: databaseURL},
-		Redis: RedisConfig{Addr: getenv("REDIS_ADDR", "localhost:6379"), Password: os.Getenv("REDIS_PASSWORD"), DB: redisDB, TTL: ttl},
+		Redis: redisCfg,
 		GitHub: GitHubConfig{Token: os.Getenv("GITHUB_TOKEN"), Base: getenv("GITHUB_BASE_URL", "https://api.github.com")},
 		SMTP: SMTPConfig{Host: smtpHost, Port: getenv("SMTP_PORT", "1025"), Username: os.Getenv("SMTP_USERNAME"), Password: os.Getenv("SMTP_PASSWORD"), From: smtpFrom, UseTLS: getenv("SMTP_TLS", "false") == "true"},
 		Scanner: ScannerConfig{Interval: interval, Workers: workers},
 		Auth:    AuthConfig{APIKey: apiKey},
 	}, nil
+}
+
+func loadRedisConfig(defaultDB int, ttl time.Duration) (RedisConfig, error) {
+	if rawURL := os.Getenv("REDIS_URL"); rawURL != "" {
+		parsed, err := url.Parse(rawURL)
+		if err != nil {
+			return RedisConfig{}, fmt.Errorf("parsing REDIS_URL: %w", err)
+		}
+		password, _ := parsed.User.Password()
+		db := defaultDB
+		if parsed.Path != "" && parsed.Path != "/" {
+			parsedDB, err := strconv.Atoi(strings.TrimPrefix(parsed.Path, "/"))
+			if err != nil {
+				return RedisConfig{}, fmt.Errorf("parsing REDIS_URL database: %w", err)
+			}
+			db = parsedDB
+		}
+		return RedisConfig{Addr: parsed.Host, Password: password, DB: db, UseTLS: parsed.Scheme == "rediss", TTL: ttl}, nil
+	}
+	return RedisConfig{Addr: getenv("REDIS_ADDR", "localhost:6379"), Password: os.Getenv("REDIS_PASSWORD"), DB: defaultDB, TTL: ttl}, nil
 }
 
 func getenv(key, fallback string) string {

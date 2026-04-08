@@ -214,6 +214,7 @@ Important optional variables:
 - BASE_URL: used when constructing confirmation/unsubscribe links in emails.
 - SCANNER_INTERVAL, SCANNER_WORKERS: controls scanner cadence and concurrency.
 - GITHUB_CACHE_TTL: Redis cache TTL for GitHub responses.
+- REDIS_URL: preferred on Heroku and other managed Redis services; supports `redis://` and `rediss://`.
 
 Docker compose overrides to use container hostnames:
 

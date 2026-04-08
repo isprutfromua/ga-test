@@ -2,6 +2,7 @@ package cache
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"time"
 
@@ -18,7 +19,11 @@ type Cache interface {
 type RedisCache struct{ client *redis.Client }
 
 func NewRedis(cfg config.RedisConfig) (Cache, error) {
-	client := redis.NewClient(&redis.Options{Addr: cfg.Addr, Password: cfg.Password, DB: cfg.DB})
+	options := &redis.Options{Addr: cfg.Addr, Password: cfg.Password, DB: cfg.DB}
+	if cfg.UseTLS {
+		options.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	}
+	client := redis.NewClient(options)
 	if err := client.Ping(context.Background()).Err(); err != nil { return nil, err }
 	return &RedisCache{client: client}, nil
 }
