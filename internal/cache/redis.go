@@ -21,7 +21,7 @@ type RedisCache struct{ client *redis.Client }
 func NewRedis(cfg config.RedisConfig) (Cache, error) {
 	options := &redis.Options{Addr: cfg.Addr, Password: cfg.Password, DB: cfg.DB}
 	if cfg.UseTLS {
-		options.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+		options.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12, ServerName: cfg.TLSServerName}
 	}
 	client := redis.NewClient(options)
 	if err := client.Ping(context.Background()).Err(); err != nil { return nil, err }

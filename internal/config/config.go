@@ -36,6 +36,7 @@ type RedisConfig struct {
 	Password string
 	DB       int
 	UseTLS   bool
+	TLSServerName string
 	TTL      time.Duration
 }
 
@@ -100,23 +101,37 @@ func Load() (*Config, error) {
 }
 
 func loadRedisConfig(defaultDB int, ttl time.Duration) (RedisConfig, error) {
+	if rawTLSURL := os.Getenv("REDIS_TLS_URL"); rawTLSURL != "" {
+		return parseRedisURL("REDIS_TLS_URL", rawTLSURL, defaultDB, ttl)
+	}
 	if rawURL := os.Getenv("REDIS_URL"); rawURL != "" {
-		parsed, err := url.Parse(rawURL)
-		if err != nil {
-			return RedisConfig{}, fmt.Errorf("parsing REDIS_URL: %w", err)
-		}
-		password, _ := parsed.User.Password()
-		db := defaultDB
-		if parsed.Path != "" && parsed.Path != "/" {
-			parsedDB, err := strconv.Atoi(strings.TrimPrefix(parsed.Path, "/"))
-			if err != nil {
-				return RedisConfig{}, fmt.Errorf("parsing REDIS_URL database: %w", err)
-			}
-			db = parsedDB
-		}
-		return RedisConfig{Addr: parsed.Host, Password: password, DB: db, UseTLS: parsed.Scheme == "rediss", TTL: ttl}, nil
+		return parseRedisURL("REDIS_URL", rawURL, defaultDB, ttl)
 	}
 	return RedisConfig{Addr: getenv("REDIS_ADDR", "localhost:6379"), Password: os.Getenv("REDIS_PASSWORD"), DB: defaultDB, TTL: ttl}, nil
+}
+
+func parseRedisURL(varName, rawURL string, defaultDB int, ttl time.Duration) (RedisConfig, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return RedisConfig{}, fmt.Errorf("parsing %s: %w", varName, err)
+	}
+	password, _ := parsed.User.Password()
+	db := defaultDB
+	if parsed.Path != "" && parsed.Path != "/" {
+		parsedDB, err := strconv.Atoi(strings.TrimPrefix(parsed.Path, "/"))
+		if err != nil {
+			return RedisConfig{}, fmt.Errorf("parsing %s database: %w", varName, err)
+		}
+		db = parsedDB
+	}
+	return RedisConfig{
+		Addr:          parsed.Host,
+		Password:      password,
+		DB:            db,
+		UseTLS:        parsed.Scheme == "rediss",
+		TLSServerName: os.Getenv("REDIS_TLS_SERVER_NAME"),
+		TTL:           ttl,
+	}, nil
 }
 
 func getenv(key, fallback string) string {
