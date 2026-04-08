@@ -14,6 +14,11 @@ import (
 	"github.com/isprutfromua/ga-test/internal/repository"
 )
 
+const (
+	scannerGitHubTimeout = 10 * time.Second
+	scannerDBTimeout     = 5 * time.Second
+)
+
 type Scanner struct {
 	repo     repository.SubscriptionRepository
 	github   ghclient.Client
@@ -60,7 +65,17 @@ func (s *Scanner) scan(ctx context.Context) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for job := range jobs { s.checkRepo(ctx, job.id, job.email, job.repo, job.unsubTok, job.lastTag) }
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case job, ok := <-jobs:
+					if !ok {
+						return
+					}
+					s.checkRepo(ctx, job.id, job.email, job.repo, job.unsubTok, job.lastTag)
+				}
+			}
 		}()
 	}
 	for _, sub := range subs {
@@ -77,7 +92,13 @@ func (s *Scanner) scan(ctx context.Context) {
 }
 
 func (s *Scanner) checkRepo(ctx context.Context, subID int64, email, repo, unsubToken, lastTag string) {
-	release, err := s.github.LatestRelease(ctx, repo)
+	if ctx.Err() != nil {
+		return
+	}
+
+	ghCtx, cancelGH := context.WithTimeout(ctx, scannerGitHubTimeout)
+	release, err := s.github.LatestRelease(ghCtx, repo)
+	cancelGH()
 	if err != nil {
 		if errors.Is(err, ghclient.ErrNotFound) { return }
 		if errors.Is(err, ghclient.ErrRateLimited) { s.metrics.GitHubRateLimitHits.Inc(); return }
@@ -85,11 +106,19 @@ func (s *Scanner) checkRepo(ctx context.Context, subID int64, email, repo, unsub
 		return
 	}
 	if release == nil || release.Draft || release.Prerelease || release.TagName == lastTag { return }
+	if ctx.Err() != nil {
+		return
+	}
 	unsubURL := fmt.Sprintf("%s/api/unsubscribe/%s", s.baseURL, unsubToken)
 	if err := s.mailer.SendReleaseNotificationWithUnsub(email, repo, mailer.ReleaseInfo{TagName: release.TagName, Name: release.Name, Body: release.Body, HTMLURL: release.HTMLURL, PublishedAt: release.PublishedAt}, unsubURL); err != nil {
 		s.metrics.EmailErrors.Inc()
 		return
 	}
 	s.metrics.EmailsSent.Inc()
-	if err := s.repo.UpdateLastSeenTag(ctx, subID, release.TagName); err != nil { s.metrics.ScanErrors.Inc() }
+	if ctx.Err() != nil {
+		return
+	}
+	dbCtx, cancelDB := context.WithTimeout(ctx, scannerDBTimeout)
+	if err := s.repo.UpdateLastSeenTag(dbCtx, subID, release.TagName); err != nil { s.metrics.ScanErrors.Inc() }
+	cancelDB()
 }
