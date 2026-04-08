@@ -108,11 +108,9 @@ func TestGetByTokens(t *testing.T) {
 			repo, mock, closeDB := newMockRepo(t)
 			defer closeDB()
 
-			clause := "confirm_token = $1"
+			clause := "confirm_token = $1 OR confirm_token = $2"
 			if !tt.byConfirm {
 				clause = "unsubscribe_token = $1 OR unsubscribe_token = $2"
-			} else {
-				clause = "confirm_token = $1 OR confirm_token = $2"
 			}
 			q := regexp.QuoteMeta(`
 SELECT id, email, repo, confirmed, last_seen_tag, confirm_token, unsubscribe_token, created_at, updated_at
