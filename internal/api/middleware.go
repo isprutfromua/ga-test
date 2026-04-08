@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/subtle"
 	"net/http"
 	"time"
 
@@ -16,7 +17,8 @@ func APIKeyMiddleware(expected string) func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-			if r.Header.Get("X-API-Key") != expected {
+			provided := r.Header.Get("X-API-Key")
+			if len(provided) != len(expected) || subtle.ConstantTimeCompare([]byte(provided), []byte(expected)) != 1 {
 				writeJSON(w, http.StatusUnauthorized, errorBody("unauthorized"))
 				return
 			}
