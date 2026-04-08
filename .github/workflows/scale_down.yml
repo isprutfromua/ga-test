@@ -1,0 +1,38 @@
+name: Scale Down Heroku
+
+on:
+  schedule:
+    - cron: '0 15 * * 1-5' # 15:00 UTC / 6:00 PM Kyiv
+  workflow_dispatch:
+
+jobs:
+  scale_down:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Request Heroku Scale Down
+        id: heroku_api
+        env:
+          HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
+          APP_NAME: ${{ vars.HEROKU_APP_NAME }}
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" -n https://api.heroku.com/apps/$APP_NAME/formation \
+            -X PATCH \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/vnd.heroku+json; version=3" \
+            -H "Authorization: Bearer $HEROKU_API_KEY" \
+            -d '{"updates": [{"process": "web", "quantity": 0}]}')
+          
+          echo "status=$STATUS" >> $GITHUB_OUTPUT
+
+      - name: Success Summary
+        if: steps.heroku_api.outputs.status == '200'
+        run: |
+          echo "### 💤 Scale Down Successful" >> $GITHUB_STEP_SUMMARY
+          echo "The app **${{ vars.HEROKU_APP_NAME }}** has been put to sleep (0 dynos)." >> $GITHUB_STEP_SUMMARY
+
+      - name: Failure Summary
+        if: steps.heroku_api.outputs.status != '200'
+        run: |
+          echo "### ❌ Scale Down Failed" >> $GITHUB_STEP_SUMMARY
+          echo "API returned status: ${{ steps.heroku_api.outputs.status }}" >> $GITHUB_STEP_SUMMARY
+          exit 1
