@@ -37,6 +37,7 @@ type RedisConfig struct {
 	DB       int
 	UseTLS   bool
 	TLSServerName string
+	TLSInsecureSkipVerify bool
 	TTL      time.Duration
 }
 
@@ -130,6 +131,7 @@ func parseRedisURL(varName, rawURL string, defaultDB int, ttl time.Duration) (Re
 		DB:            db,
 		UseTLS:        parsed.Scheme == "rediss",
 		TLSServerName: os.Getenv("REDIS_TLS_SERVER_NAME"),
+		TLSInsecureSkipVerify: getenv("REDIS_TLS_INSECURE_SKIP_VERIFY", "false") == "true",
 		TTL:           ttl,
 	}, nil
 }

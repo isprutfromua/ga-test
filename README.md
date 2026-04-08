@@ -217,6 +217,7 @@ Important optional variables:
 - REDIS_URL: preferred on Heroku and other managed Redis services; supports `redis://` and `rediss://`.
 - REDIS_TLS_URL: if present, takes precedence over REDIS_URL and is recommended for Heroku Redis TLS.
 - REDIS_TLS_SERVER_NAME: optional TLS SNI/hostname override for certificate validation.
+- REDIS_TLS_INSECURE_SKIP_VERIFY: set to true only as a temporary workaround when provider CA chains are unavailable in runtime trust store.
 
 Docker compose overrides to use container hostnames:
 
