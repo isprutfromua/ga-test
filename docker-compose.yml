@@ -1,0 +1,34 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      API_KEY: dev-api-key-change-in-production
+      BASE_URL: http://localhost:8080
+      DATABASE_URL: postgres://postgres:postgres@db:5432/postgres?sslmode=disable
+      REDIS_ADDR: redis:6379
+      SMTP_HOST: mailhog
+      SMTP_PORT: 1025
+      SMTP_FROM: noreply@example.com
+      SCANNER_INTERVAL: 5m
+      SCANNER_WORKERS: 5
+    depends_on:
+      - db
+      - redis
+      - mailhog
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+  mailhog:
+    image: mailhog/mailhog
+    ports:
+      - "8025:8025"
+      - "1025:1025"

@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Release Radar — GitHub Release Notifications</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            serif:  ['"Instrument Serif"', 'Georgia', 'serif'],
+            mono:   ['"DM Mono"', 'monospace'],
+            sans:   ['Inter', 'system-ui', 'sans-serif'],
+          },
+          colors: {
+            ink:    '#0d0d0d',
+            paper:  '#f5f0e8',
+            warm:   '#e8e0d0',
+            accent: '#d4430a',
+            muted:  '#6b6560',
+            border: '#ccc5b8',
+          },
+          animation: {
+            'fade-up': 'fadeUp 0.5s ease forwards',
+            'pulse-dot': 'pulseDot 2s ease-in-out infinite',
+          },
+          keyframes: {
+            fadeUp: {
+              '0%':   { opacity: '0', transform: 'translateY(12px)' },
+              '100%': { opacity: '1', transform: 'translateY(0)' },
+            },
+            pulseDot: {
+              '0%, 100%': { opacity: '1', transform: 'scale(1)' },
+              '50%':      { opacity: '0.4', transform: 'scale(0.8)' },
+            },
+          },
+        },
+      },
+    }
+  </script>
+
+  <style>
+    body { background-color: #f5f0e8; }
+
+    /* Grain overlay for tactile paper feel */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+      pointer-events: none;
+      z-index: 50;
+    }
+
+    .rule { border-top: 1px solid #ccc5b8; }
+
+    /* htmx loading indicator */
+    .htmx-request .btn-submit { opacity: 0.7; pointer-events: none; }
+    .htmx-request .spinner    { display: inline-block; }
+    .spinner { display: none; }
+
+    input:focus { outline: none; box-shadow: 0 0 0 2px #d4430a44; }
+
+    /* Number list style for features */
+    .feature-num {
+      font-family: 'Instrument Serif', serif;
+      font-size: 2rem;
+      line-height: 1;
+      color: #d4430a;
+    }
+
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateX(-8px); }
+      to   { opacity: 1; transform: translateX(0); }
+    }
+    #response-area > * { animation: slideIn 0.35s ease forwards; }
+  </style>
+</head>
+
+<body class="min-h-full font-sans text-ink">
+
+  <!-- ── Header ── -->
+  <header class="border-b border-border bg-paper/80 backdrop-blur sticky top-0 z-40">
+    <div class="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <span class="animate-pulse-dot w-2 h-2 rounded-full bg-accent inline-block"></span>
+        <span class="font-mono text-sm font-medium tracking-tight text-ink">release-radar</span>
+      </div>
+      <nav class="hidden sm:flex items-center gap-6 text-xs font-medium text-muted uppercase tracking-widest">
+        <a href="#subscribe" class="hover:text-accent transition-colors">Subscribe</a>
+        <a href="#how" class="hover:text-accent transition-colors">How it works</a>
+        <a href="https://github.com" target="_blank" class="hover:text-accent transition-colors">GitHub ↗</a>
+      </nav>
+    </div>
+  </header>
+
+  <!-- ── Hero ── -->
+  <section class="max-w-5xl mx-auto px-6 pt-20 pb-16">
+    <div class="max-w-2xl">
+      <p class="font-mono text-xs text-accent uppercase tracking-[0.2em] mb-6">
+        Open-source release tracking
+      </p>
+      <h1 class="font-serif text-5xl sm:text-7xl leading-[1.05] mb-6 text-ink">
+        Never miss a<br />
+        <em class="not-italic text-accent">release.</em>
+      </h1>
+      <p class="text-muted text-lg leading-relaxed max-w-md">
+        Subscribe to any public GitHub repository and receive a clean email the moment
+        a new release is published — no account required.
+      </p>
+    </div>
+  </section>
+
+  <!-- ── Rule ── -->
+  <div class="max-w-5xl mx-auto px-6"><div class="rule"></div></div>
+
+  <!-- ── Main layout: form + features ── -->
+  <main class="max-w-5xl mx-auto px-6 py-16 grid grid-cols-1 lg:grid-cols-5 gap-16">
+
+    <!-- Subscribe form (3/5 width) -->
+    <div id="subscribe" class="lg:col-span-3">
+      <h2 class="font-serif text-3xl mb-2">Start tracking</h2>
+      <p class="text-muted text-sm mb-8">Enter your email and a GitHub repository to get started.</p>
+
+      <form
+        hx-post="/api/subscribe"
+        hx-target="#response-area"
+        hx-swap="innerHTML"
+        hx-encoding="application/x-www-form-urlencoded"
+        hx-headers='{"X-API-Key": "YOUR_API_KEY_HERE"}'
+        class="space-y-5"
+      >
+        <!-- Email -->
+        <div>
+          <label for="email" class="block font-mono text-xs uppercase tracking-widest text-muted mb-2">
+            Email address
+          </label>
+          <input
+            id="email"
+            name="email"
+            type="email"
+            required
+            placeholder="you@example.com"
+            class="w-full bg-warm border border-border rounded-none px-4 py-3 font-mono text-sm text-ink placeholder-border transition-shadow focus:border-accent"
+          />
+        </div>
+
+        <!-- Repo -->
+        <div>
+          <label for="repo" class="block font-mono text-xs uppercase tracking-widest text-muted mb-2">
+            GitHub repository
+          </label>
+          <div class="relative">
+            <span class="absolute left-4 top-1/2 -translate-y-1/2 text-border font-mono text-sm select-none">
+              github.com /
+            </span>
+            <input
+              id="repo"
+              name="repo"
+              type="text"
+              required
+              placeholder="owner/repository"
+              pattern="[^/]+/[^/]+"
+              title="Format: owner/repository"
+              class="w-full bg-warm border border-border rounded-none pl-[7.5rem] pr-4 py-3 font-mono text-sm text-ink placeholder-border transition-shadow focus:border-accent"
+            />
+          </div>
+          <p class="mt-1.5 font-mono text-xs text-muted">e.g. golang/go · vercel/next.js · torvalds/linux</p>
+        </div>
+
+        <!-- Submit -->
+        <div class="pt-2">
+          <button
+            type="submit"
+            class="btn-submit group relative w-full sm:w-auto bg-ink text-paper font-mono text-sm px-8 py-3.5 hover:bg-accent transition-colors duration-200 flex items-center gap-3"
+          >
+            <span>Subscribe →</span>
+            <span class="spinner">
+              <svg class="animate-spin h-4 w-4 text-paper" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+              </svg>
+            </span>
+          </button>
+        </div>
+      </form>
+
+      <!-- Response area populated by htmx -->
+      <div id="response-area" class="mt-6 font-mono text-sm min-h-[48px]"></div>
+
+      <!-- htmx response templates (hidden, injected by server or client-side) -->
+      <template id="tpl-success">
+        <div class="flex items-start gap-3 border border-green-300 bg-green-50 px-4 py-3 text-green-800">
+          <span class="text-green-500 mt-0.5">✓</span>
+          <div>
+            <p class="font-medium">Check your inbox!</p>
+            <p class="text-xs text-green-700 mt-0.5">A confirmation email is on its way. Click the link to activate.</p>
+          </div>
+        </div>
+      </template>
+    </div>
+
+    <!-- How it works (2/5 width) -->
+    <div id="how" class="lg:col-span-2 lg:border-l lg:border-border lg:pl-12">
+      <h2 class="font-serif text-3xl mb-10">How it works</h2>
+      <ol class="space-y-8">
+        <li class="flex gap-5">
+          <span class="feature-num shrink-0">01</span>
+          <div>
+            <p class="font-medium text-ink mb-1">Subscribe</p>
+            <p class="text-muted text-sm leading-relaxed">Enter your email and a GitHub repository. We validate the repo exists instantly.</p>
+          </div>
+        </li>
+        <li class="flex gap-5">
+          <span class="feature-num shrink-0">02</span>
+          <div>
+            <p class="font-medium text-ink mb-1">Confirm</p>
+            <p class="text-muted text-sm leading-relaxed">Click the confirmation link in your email to activate your subscription.</p>
+          </div>
+        </li>
+        <li class="flex gap-5">
+          <span class="feature-num shrink-0">03</span>
+          <div>
+            <p class="font-medium text-ink mb-1">Get notified</p>
+            <p class="text-muted text-sm leading-relaxed">We check for new releases every 5 minutes. You'll be the first to know.</p>
+          </div>
+        </li>
+        <li class="flex gap-5">
+          <span class="feature-num shrink-0">04</span>
+          <div>
+            <p class="font-medium text-ink mb-1">Unsubscribe anytime</p>
+            <p class="text-muted text-sm leading-relaxed">Every notification includes a one-click unsubscribe link. No friction.</p>
+          </div>
+        </li>
+      </ol>
+    </div>
+  </main>
+
+  <!-- ── Rule ── -->
+  <div class="max-w-5xl mx-auto px-6"><div class="rule"></div></div>
+
+  <!-- ── Lookup subscriptions ── -->
+  <section class="max-w-5xl mx-auto px-6 py-16">
+    <div class="max-w-xl">
+      <h2 class="font-serif text-3xl mb-2">Your subscriptions</h2>
+      <p class="text-muted text-sm mb-8">Look up all repositories you're currently tracking.</p>
+
+      <div class="flex gap-0">
+        <input
+          id="lookup-email"
+          type="email"
+          placeholder="you@example.com"
+          class="flex-1 bg-warm border border-border border-r-0 px-4 py-3 font-mono text-sm text-ink placeholder-border focus:outline-none focus:border-accent transition-shadow"
+        />
+        <button
+          onclick="lookupSubscriptions()"
+          class="bg-ink text-paper font-mono text-xs px-6 py-3 hover:bg-accent transition-colors whitespace-nowrap"
+        >
+          Look up →
+        </button>
+      </div>
+
+      <div id="lookup-results" class="mt-6 font-mono text-sm"></div>
+    </div>
+  </section>
+
+  <!-- ── Footer ── -->
+  <footer class="border-t border-border">
+    <div class="max-w-5xl mx-auto px-6 py-8 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+      <p class="font-mono text-xs text-muted">
+        release-radar · built with Go, htmx, Tailwind
+      </p>
+      <p class="font-mono text-xs text-border">
+        scans every 5 min · redis-cached · prometheus metrics
+      </p>
+    </div>
+  </footer>
+
+  <script>
+    // ── htmx response handling ─────────────────────────────────────────────
+    // htmx will swap the server's JSON response into #response-area.
+    // We intercept and render friendly messages instead.
+    document.body.addEventListener('htmx:afterRequest', function(evt) {
+      if (evt.detail.target.id !== 'response-area') return;
+
+      const area = evt.detail.target;
+      const status = evt.detail.xhr.status;
+
+      let html = '';
+      try {
+        const data = JSON.parse(evt.detail.xhr.responseText);
+        if (status === 200) {
+          html = `<div class="flex items-start gap-3 border border-green-300 bg-green-50 px-4 py-3 text-green-800">
+            <span class="text-green-500 mt-0.5">✓</span>
+            <div>
+              <p class="font-medium">Check your inbox!</p>
+              <p class="text-xs text-green-700 mt-0.5">A confirmation email has been sent. Click the link inside to activate.</p>
+            </div>
+          </div>`;
+        } else {
+          const msg = data.error || 'Something went wrong. Please try again.';
+          const colorMap = {
+            400: 'orange', 404: 'orange', 409: 'blue', 429: 'yellow', 500: 'red',
+          };
+          const c = colorMap[status] || 'red';
+          html = `<div class="flex items-start gap-3 border border-${c}-300 bg-${c}-50 px-4 py-3 text-${c}-800">
+            <span class="mt-0.5">⚠</span>
+            <p>${msg}</p>
+          </div>`;
+        }
+      } catch {
+        html = `<div class="border border-red-300 bg-red-50 px-4 py-3 text-red-800"><p>Unexpected response.</p></div>`;
+      }
+
+      area.innerHTML = html;
+    });
+
+    // ── Subscription lookup ────────────────────────────────────────────────
+    async function lookupSubscriptions() {
+      const email = document.getElementById('lookup-email').value.trim();
+      const area  = document.getElementById('lookup-results');
+
+      if (!email) {
+        area.innerHTML = `<p class="text-muted">Please enter an email address.</p>`;
+        return;
+      }
+
+      area.innerHTML = `<p class="text-muted animate-pulse">Looking up…</p>`;
+
+      try {
+        const res  = await fetch(`/api/subscriptions?email=${encodeURIComponent(email)}`, {
+          headers: { 'X-API-Key': 'YOUR_API_KEY_HERE' },
+        });
+        const data = await res.json();
+
+        if (!res.ok) {
+          area.innerHTML = `<p class="text-accent">${data.error || 'Error fetching subscriptions.'}</p>`;
+          return;
+        }
+
+        if (!Array.isArray(data) || data.length === 0) {
+          area.innerHTML = `<p class="text-muted">No subscriptions found for <span class="text-ink">${email}</span>.</p>`;
+          return;
+        }
+
+        const rows = data.map(s => `
+          <div class="flex items-center justify-between border-b border-border py-3 gap-4">
+            <div class="flex items-center gap-3 min-w-0">
+              <span class="shrink-0 w-2 h-2 rounded-full ${s.confirmed ? 'bg-green-500' : 'bg-border'}"></span>
+              <span class="truncate text-ink">${s.repo}</span>
+            </div>
+            <div class="flex items-center gap-3 shrink-0">
+              ${s.last_seen_tag ? `<span class="text-muted text-xs">${s.last_seen_tag}</span>` : ''}
+              <span class="text-xs px-2 py-0.5 border ${s.confirmed ? 'border-green-300 text-green-700 bg-green-50' : 'border-border text-muted'}">
+                ${s.confirmed ? 'active' : 'pending'}
+              </span>
+            </div>
+          </div>
+        `).join('');
+
+        area.innerHTML = `
+          <div class="mb-3 text-xs text-muted uppercase tracking-widest">${data.length} subscription${data.length !== 1 ? 's' : ''}</div>
+          <div>${rows}</div>
+        `;
+      } catch (err) {
+        area.innerHTML = `<p class="text-accent">Network error. Please try again.</p>`;
+      }
+    }
+
+    // Allow Enter key in lookup input.
+    document.getElementById('lookup-email').addEventListener('keydown', e => {
+      if (e.key === 'Enter') lookupSubscriptions();
+    });
+  </script>
+</body>
+</html>
