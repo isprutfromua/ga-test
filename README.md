@@ -188,6 +188,16 @@ Using the deployed website:
 5. Use the "Your subscriptions" lookup to view and manage subscriptions — requires a valid API key.
 6. Keep the unsubscribe link from any received email to stop notifications later.
 
+Local browser test flow (Docker compose + Mailpit):
+
+1. Open http://localhost:8080
+2. Enter your email and repository in owner/repo format.
+3. Click Subscribe.
+4. Open http://localhost:8025 and find the confirmation email.
+5. Open the confirmation link to confirm the subscription.
+6. Return to the home page at http://localhost:8080.
+7. Use the subscription lookup by email to verify the subscribed repositories are listed.
+
 Using the deployed API:
 
 ```bash
