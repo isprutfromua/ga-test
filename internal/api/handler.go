@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -39,20 +40,60 @@ func (h *Handler) Subscribe(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) ConfirmSubscription(w http.ResponseWriter, r *http.Request) {
 	token := chi.URLParam(r, "token")
-	if token == "" { writeJSON(w, http.StatusBadRequest, errorBody("token is required")); return }
+	if token == "" {
+		if prefersHTML(r) {
+			http.Redirect(w, r, "/error.html?code=400&reason="+url.QueryEscape("Token is required"), http.StatusSeeOther)
+			return
+		}
+		writeJSON(w, http.StatusBadRequest, errorBody("token is required")); return
+	}
 	if err := h.svc.Confirm(r.Context(), token); err != nil {
-		if errors.Is(err, service.ErrTokenNotFound) { writeJSON(w, http.StatusNotFound, errorBody("token not found")); return }
+		if errors.Is(err, service.ErrTokenNotFound) {
+			if prefersHTML(r) {
+				http.Redirect(w, r, "/error.html?code=404&reason="+url.QueryEscape("Confirmation token not found"), http.StatusSeeOther)
+				return
+			}
+			writeJSON(w, http.StatusNotFound, errorBody("token not found")); return
+		}
+		if prefersHTML(r) {
+			http.Redirect(w, r, "/error.html?code=400&reason="+url.QueryEscape("Invalid confirmation token"), http.StatusSeeOther)
+			return
+		}
 		writeJSON(w, http.StatusBadRequest, errorBody("invalid token")); return
+	}
+	if prefersHTML(r) {
+		http.Redirect(w, r, "/subscription.html?state=confirmed", http.StatusSeeOther)
+		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"message": "subscription confirmed successfully"})
 }
 
 func (h *Handler) Unsubscribe(w http.ResponseWriter, r *http.Request) {
 	token := chi.URLParam(r, "token")
-	if token == "" { writeJSON(w, http.StatusBadRequest, errorBody("token is required")); return }
+	if token == "" {
+		if prefersHTML(r) {
+			http.Redirect(w, r, "/error.html?code=400&reason="+url.QueryEscape("Token is required"), http.StatusSeeOther)
+			return
+		}
+		writeJSON(w, http.StatusBadRequest, errorBody("token is required")); return
+	}
 	if err := h.svc.Unsubscribe(r.Context(), token); err != nil {
-		if errors.Is(err, service.ErrTokenNotFound) { writeJSON(w, http.StatusNotFound, errorBody("token not found")); return }
+		if errors.Is(err, service.ErrTokenNotFound) {
+			if prefersHTML(r) {
+				http.Redirect(w, r, "/error.html?code=404&reason="+url.QueryEscape("Unsubscribe token not found"), http.StatusSeeOther)
+				return
+			}
+			writeJSON(w, http.StatusNotFound, errorBody("token not found")); return
+		}
+		if prefersHTML(r) {
+			http.Redirect(w, r, "/error.html?code=400&reason="+url.QueryEscape("Invalid unsubscribe token"), http.StatusSeeOther)
+			return
+		}
 		writeJSON(w, http.StatusBadRequest, errorBody("invalid token")); return
+	}
+	if prefersHTML(r) {
+		http.Redirect(w, r, "/subscription.html?state=unsubscribed", http.StatusSeeOther)
+		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"message": "unsubscribed successfully"})
 }
@@ -90,4 +131,9 @@ func isValidEmail(email string) bool {
 	if at < 1 { return false }
 	domain := email[at+1:]
 	return strings.Contains(domain, ".") && len(domain) > 2
+}
+
+func prefersHTML(r *http.Request) bool {
+	accept := r.Header.Get("Accept")
+	return strings.Contains(accept, "text/html")
 }

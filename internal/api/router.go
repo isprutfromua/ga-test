@@ -17,7 +17,6 @@ func NewRouter(h *Handler, met *metrics.Metrics, apiKey, staticDir string) http.
 
 	r.Get("/healthz", HealthHandler)
 	r.Handle("/metrics", MetricsHandler())
-	r.Handle("/", http.FileServer(http.Dir(staticDir)))
 
 	r.Route("/api", func(api chi.Router) {
 		api.Post("/subscribe", h.Subscribe)
@@ -25,6 +24,8 @@ func NewRouter(h *Handler, met *metrics.Metrics, apiKey, staticDir string) http.
 		api.Get("/unsubscribe/{token}", h.Unsubscribe)
 		api.Get("/subscriptions", h.GetSubscriptions)
 	})
+
+	r.Handle("/*", http.FileServer(http.Dir(staticDir)))
 
 	return r
 }

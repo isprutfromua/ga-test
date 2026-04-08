@@ -3,20 +3,16 @@ services:
     build: .
     ports:
       - "8080:8080"
+    env_file:
+      - .env
     environment:
-      API_KEY: dev-api-key-change-in-production
-      BASE_URL: http://localhost:8080
-      DATABASE_URL: postgres://postgres:postgres@db:5432/postgres?sslmode=disable
-      REDIS_ADDR: redis:6379
-      SMTP_HOST: mailhog
-      SMTP_PORT: 1025
-      SMTP_FROM: noreply@example.com
-      SCANNER_INTERVAL: 5m
-      SCANNER_WORKERS: 5
+      DATABASE_URL: ${DOCKER_DATABASE_URL:-postgres://postgres:postgres@db:5432/postgres?sslmode=disable}
+      REDIS_ADDR: ${DOCKER_REDIS_ADDR:-redis:6379}
+      SMTP_HOST: ${DOCKER_SMTP_HOST:-mailpit}
     depends_on:
       - db
       - redis
-      - mailhog
+      - mailpit
   db:
     image: postgres:16
     environment:
@@ -27,8 +23,8 @@ services:
     image: redis:7
     ports:
       - "6379:6379"
-  mailhog:
-    image: mailhog/mailhog
+  mailpit:
+    image: ghcr.io/axllent/mailpit:latest
     ports:
       - "8025:8025"
       - "1025:1025"

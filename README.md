@@ -22,7 +22,7 @@ A production-grade Go monolith that sends email notifications when new GitHub re
 │            Repository Layer (Postgres)                       │
 ├────────────────┬────────────────────────────────────────────┤
 │  GitHub Client │  Redis Cache (10-min TTL)                  │
-│  (rate-limit   │  Mailer (SMTP / Mailhog in dev)            │
+│  (rate-limit   │  Mailer (SMTP / Mailpit in dev)            │
 │   handling)    │                                            │
 ├────────────────┴────────────────────────────────────────────┤
 │         Background Scanner (bounded worker pool)             │
@@ -115,7 +115,7 @@ docker compose up --build
 | Service | URL |
 |---|---|
 | **App** | http://localhost:8080 |
-| **Mailhog UI** (inspect emails) | http://localhost:8025 |
+| **Mailpit UI** (inspect emails) | http://localhost:8025 |
 | **Prometheus metrics** | http://localhost:8080/metrics |
 | **Health check** | http://localhost:8080/healthz |
 

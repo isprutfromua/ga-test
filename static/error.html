@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Release Radar — Error</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            serif: ['"Instrument Serif"', 'Georgia', 'serif'],
+            mono: ['"DM Mono"', 'monospace'],
+            sans: ['Inter', 'system-ui', 'sans-serif'],
+          },
+          colors: {
+            ink: '#0d0d0d',
+            paper: '#f5f0e8',
+            warm: '#e8e0d0',
+            accent: '#d4430a',
+            muted: '#6b6560',
+            border: '#ccc5b8',
+          },
+          animation: {
+            'fade-up': 'fadeUp 0.5s ease forwards',
+            'pulse-dot': 'pulseDot 2s ease-in-out infinite',
+          },
+          keyframes: {
+            fadeUp: {
+              '0%': { opacity: '0', transform: 'translateY(12px)' },
+              '100%': { opacity: '1', transform: 'translateY(0)' },
+            },
+            pulseDot: {
+              '0%, 100%': { opacity: '1', transform: 'scale(1)' },
+              '50%': { opacity: '0.4', transform: 'scale(0.8)' },
+            },
+          },
+        },
+      },
+    };
+  </script>
+
+  <style>
+    body { background-color: #f5f0e8; }
+
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+      pointer-events: none;
+      z-index: 50;
+    }
+
+    .rule { border-top: 1px solid #ccc5b8; }
+  </style>
+</head>
+<body class="min-h-full font-sans text-ink">
+  <header class="border-b border-border bg-paper/80 backdrop-blur sticky top-0 z-40">
+    <div class="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <span class="animate-pulse-dot w-2 h-2 rounded-full bg-accent inline-block"></span>
+        <span class="font-mono text-sm font-medium tracking-tight text-ink">release-radar</span>
+      </div>
+      <a href="/" class="font-mono text-xs uppercase tracking-widest text-muted hover:text-accent transition-colors">Home</a>
+    </div>
+  </header>
+
+  <main class="max-w-5xl mx-auto px-6 py-20 animate-fade-up">
+    <div class="max-w-2xl">
+      <p class="font-mono text-xs text-accent uppercase tracking-[0.2em] mb-6">Request failed</p>
+      <h1 class="font-serif text-5xl sm:text-7xl leading-[1.05] mb-6 text-ink" id="title">
+        Something went<br><em class="not-italic text-accent">wrong.</em>
+      </h1>
+      <p class="text-muted text-lg leading-relaxed max-w-xl" id="description">
+        This link may be invalid or expired. Please go back and try again.
+      </p>
+    </div>
+
+    <div class="max-w-5xl mx-auto pt-10"><div class="rule"></div></div>
+
+    <section class="pt-10 grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl">
+      <a href="/" class="bg-ink text-paper font-mono text-sm px-8 py-3.5 hover:bg-accent transition-colors duration-200 inline-flex items-center justify-center">
+        Back to dashboard →
+      </a>
+      <a href="mailto:support@release-radar.local" class="border border-border bg-warm text-ink font-mono text-sm px-8 py-3.5 hover:border-accent transition-colors duration-200 inline-flex items-center justify-center">
+        Contact support
+      </a>
+    </section>
+  </main>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('code') || '400';
+    const reason = params.get('reason') || 'The request could not be processed.';
+
+    const title = document.getElementById('title');
+    const description = document.getElementById('description');
+
+    title.innerHTML = `Error ${code}<br><em class="not-italic text-accent">request failed.</em>`;
+    description.textContent = reason;
+  </script>
+</body>
+</html>
