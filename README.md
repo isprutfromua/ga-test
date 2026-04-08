@@ -136,6 +136,10 @@ Default local endpoints:
 - Metrics: http://localhost:8080/metrics
 - Mailpit UI: http://localhost:8025
 
+Deployed website:
+
+- App: https://ga-test-app-82466e574c85.herokuapp.com/
+
 ## 5. Development Workflow
 
 Recommended flow:
@@ -170,6 +174,34 @@ go test ./internal/api -run 'TestSwaggerContractStatusMatrix|TestAuthBoundaries'
 ```
 
 6. Open PR and let GitHub Actions run the same checks.
+
+Using the deployed website:
+
+1. Open https://ga-test-app-82466e574c85.herokuapp.com/
+2. On first visit, you will be prompted to enter the API key (from your Heroku app config).
+   - The key is stored securely in your browser cookie and persists across sessions.
+   - You can update it anytime using the "Set API key" button near the lookup section.
+3. Submit your email and GitHub repository in owner/repo format.
+4. Open the confirmation email and follow the confirmation link.
+5. Use the "Your subscriptions" lookup to view and manage subscriptions — requires a valid API key.
+6. Keep the unsubscribe link from any received email to stop notifications later.
+
+Using the deployed API:
+
+```bash
+curl -X POST https://ga-test-app-82466e574c85.herokuapp.com/api/subscribe \
+  -H "X-API-Key: <HEROKU_API_KEY>" \
+  -d "email=you@example.com&repo=golang/go"
+
+curl "https://ga-test-app-82466e574c85.herokuapp.com/api/subscriptions?email=you@example.com" \
+  -H "X-API-Key: <HEROKU_API_KEY>"
+```
+
+Current email delivery status:
+
+- Outbound SMTP is configured through CloudMailin and messages are accepted by CloudMailin.
+- Final delivery to recipient inboxes is not working yet because DNS records for the sending domain are not fully configured.
+- Until DNS is fixed (SPF/DKIM/return-path as required by CloudMailin/domain provider), email flow is effectively limited to CloudMailin processing.
 
 Useful API calls:
 
@@ -314,15 +346,24 @@ Pipeline stages currently implemented:
 
 The CI workflow uses Node 24-compatible GitHub Actions versions and the golangci-lint v2 configuration in `.golangci.yml`.
 
-Important: there is no CD stage in the repository workflow today (no image publish and no remote deployment step).
+On CI success, Heroku automatically deploys the latest push to the `main` branch.
 
 ## 10. Deployment Process
 
-Current deployment automation in-repo:
+Current deployment automation:
 
-- None.
+- **Auto-deploy to Heroku**: The app is connected to GitHub and automatically deploys whenever changes are pushed to the `main` branch.
+- Build and test steps run via GitHub Actions CI before any changes are deployed.
 
-Practical deployment strategy with existing assets:
+Heroku deployment flow:
+
+1. Push changes to `main` branch on GitHub.
+2. GitHub Actions runs lint and test suite.
+3. On CI success, Heroku automatically detects the push and rebuilds the image.
+4. New dyno processes start with updated code and current environment variables.
+5. Zero-downtime deployment (old dyno drains connections before shutdown).
+
+Alternatively, manual deployment strategy with existing assets:
 
 1. Build image with Dockerfile.
 2. Provide runtime environment variables.
