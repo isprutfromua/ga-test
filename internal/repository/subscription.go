@@ -4,10 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
+	"time"
 
 	"github.com/isprutfromua/ga-test/internal/models"
 )
+
+const dbOperationTimeout = 5 * time.Second
 
 var (
 	ErrAlreadyExists = errors.New("already exists")
@@ -30,6 +32,9 @@ type postgresRepository struct{ db *sql.DB }
 func NewPostgresRepository(db *sql.DB) SubscriptionRepository { return &postgresRepository{db: db} }
 
 func (r *postgresRepository) Create(ctx context.Context, sub *models.Subscription) error {
+	ctx, cancel := context.WithTimeout(ctx, dbOperationTimeout)
+	defer cancel()
+
 	const q = `
 INSERT INTO subscriptions (email, repo, confirmed, last_seen_tag, confirm_token, unsubscribe_token)
 VALUES ($1, $2, $3, $4, $5, $6)
@@ -42,14 +47,31 @@ RETURNING id, created_at, updated_at`
 }
 
 func (r *postgresRepository) GetByConfirmToken(ctx context.Context, token string) (*models.Subscription, error) {
-	return r.getOne(ctx, "confirm_token = $1", token)
+	ctx, cancel := context.WithTimeout(ctx, dbOperationTimeout)
+	defer cancel()
+
+	const q = `
+SELECT id, email, repo, confirmed, last_seen_tag, confirm_token, unsubscribe_token, created_at, updated_at
+FROM subscriptions WHERE confirm_token = $1`
+
+	return r.getByQuery(ctx, q, token)
 }
 
 func (r *postgresRepository) GetByUnsubscribeToken(ctx context.Context, token string) (*models.Subscription, error) {
-	return r.getOne(ctx, "unsubscribe_token = $1", token)
+	ctx, cancel := context.WithTimeout(ctx, dbOperationTimeout)
+	defer cancel()
+
+	const q = `
+SELECT id, email, repo, confirmed, last_seen_tag, confirm_token, unsubscribe_token, created_at, updated_at
+FROM subscriptions WHERE unsubscribe_token = $1`
+
+	return r.getByQuery(ctx, q, token)
 }
 
 func (r *postgresRepository) Confirm(ctx context.Context, id int64) error {
+	ctx, cancel := context.WithTimeout(ctx, dbOperationTimeout)
+	defer cancel()
+
 	res, err := r.db.ExecContext(ctx, `UPDATE subscriptions SET confirmed = TRUE, updated_at = NOW() WHERE id = $1`, id)
 	if err != nil { return err }
 	rows, err := res.RowsAffected()
@@ -59,6 +81,9 @@ func (r *postgresRepository) Confirm(ctx context.Context, id int64) error {
 }
 
 func (r *postgresRepository) Delete(ctx context.Context, id int64) error {
+	ctx, cancel := context.WithTimeout(ctx, dbOperationTimeout)
+	defer cancel()
+
 	res, err := r.db.ExecContext(ctx, `DELETE FROM subscriptions WHERE id = $1`, id)
 	if err != nil { return err }
 	rows, err := res.RowsAffected()
@@ -68,6 +93,9 @@ func (r *postgresRepository) Delete(ctx context.Context, id int64) error {
 }
 
 func (r *postgresRepository) GetByEmail(ctx context.Context, email string) ([]*models.Subscription, error) {
+	ctx, cancel := context.WithTimeout(ctx, dbOperationTimeout)
+	defer cancel()
+
 	rows, err := r.db.QueryContext(ctx, `
 SELECT id, email, repo, confirmed, last_seen_tag, confirm_token, unsubscribe_token, created_at, updated_at
 FROM subscriptions WHERE email = $1 ORDER BY id ASC`, email)
@@ -77,6 +105,9 @@ FROM subscriptions WHERE email = $1 ORDER BY id ASC`, email)
 }
 
 func (r *postgresRepository) GetAllConfirmed(ctx context.Context) ([]*models.Subscription, error) {
+	ctx, cancel := context.WithTimeout(ctx, dbOperationTimeout)
+	defer cancel()
+
 	rows, err := r.db.QueryContext(ctx, `
 SELECT id, email, repo, confirmed, last_seen_tag, confirm_token, unsubscribe_token, created_at, updated_at
 FROM subscriptions WHERE confirmed = TRUE ORDER BY id ASC`)
@@ -86,6 +117,9 @@ FROM subscriptions WHERE confirmed = TRUE ORDER BY id ASC`)
 }
 
 func (r *postgresRepository) UpdateLastSeenTag(ctx context.Context, id int64, tag string) error {
+	ctx, cancel := context.WithTimeout(ctx, dbOperationTimeout)
+	defer cancel()
+
 	res, err := r.db.ExecContext(ctx, `UPDATE subscriptions SET last_seen_tag = $2, updated_at = NOW() WHERE id = $1`, id, tag)
 	if err != nil { return err }
 	rows, err := res.RowsAffected()
@@ -94,10 +128,7 @@ func (r *postgresRepository) UpdateLastSeenTag(ctx context.Context, id int64, ta
 	return nil
 }
 
-func (r *postgresRepository) getOne(ctx context.Context, clause string, arg any) (*models.Subscription, error) {
-	query := fmt.Sprintf(`
-SELECT id, email, repo, confirmed, last_seen_tag, confirm_token, unsubscribe_token, created_at, updated_at
-FROM subscriptions WHERE %s`, clause)
+func (r *postgresRepository) getByQuery(ctx context.Context, query string, arg any) (*models.Subscription, error) {
 	row := r.db.QueryRowContext(ctx, query, arg)
 	sub := &models.Subscription{}
 	if err := row.Scan(&sub.ID, &sub.Email, &sub.Repo, &sub.Confirmed, &sub.LastSeenTag, &sub.ConfirmToken, &sub.UnsubscribeToken, &sub.CreatedAt, &sub.UpdatedAt); err != nil {
