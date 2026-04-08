@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"regexp"
 	"strings"
@@ -37,8 +38,10 @@ type client struct {
 	ttl        time.Duration
 }
 
+const githubRequestTimeout = 10 * time.Second
+
 func NewClient(cfg config.GitHubConfig, c cache.Cache, ttl time.Duration) Client {
-	return &client{httpClient: &http.Client{Timeout: 10 * time.Second}, baseURL: strings.TrimRight(cfg.Base, "/"), token: cfg.Token, cache: c, ttl: ttl}
+	return &client{httpClient: &http.Client{Timeout: githubRequestTimeout}, baseURL: strings.TrimRight(cfg.Base, "/"), token: cfg.Token, cache: c, ttl: ttl}
 }
 
 func ValidateRepoFormat(repo string) error {
@@ -53,6 +56,8 @@ func (c *client) RepoExists(ctx context.Context, repo string) error {
 	if ok, err := c.cache.Get(ctx, cacheKey, &exists); err == nil && ok {
 		if exists { return nil }
 		return ErrNotFound
+	} else if err != nil {
+		log.Printf("github cache get failed key=%s: %v", cacheKey, err)
 	}
 	status, _, err := c.getJSON(ctx, "/repos/"+repo)
 	if err != nil { return err }
@@ -60,7 +65,9 @@ func (c *client) RepoExists(ctx context.Context, repo string) error {
 		return ErrRateLimited
 	}
 	exists = status >= 200 && status < 300
-	_ = c.cache.Set(ctx, cacheKey, exists, c.ttl)
+	if err := c.cache.Set(ctx, cacheKey, exists, c.ttl); err != nil {
+		log.Printf("github cache set failed key=%s: %v", cacheKey, err)
+	}
 	if !exists { return ErrNotFound }
 	return nil
 }
@@ -69,19 +76,28 @@ func (c *client) LatestRelease(ctx context.Context, repo string) (*models.GitHub
 	if err := ValidateRepoFormat(repo); err != nil { return nil, err }
 	cacheKey := "github:release:" + repo
 	var release models.GitHubRelease
-	if ok, err := c.cache.Get(ctx, cacheKey, &release); err == nil && ok { return &release, nil }
+	if ok, err := c.cache.Get(ctx, cacheKey, &release); err == nil && ok {
+		return &release, nil
+	} else if err != nil {
+		log.Printf("github cache get failed key=%s: %v", cacheKey, err)
+	}
 	status, body, err := c.getJSON(ctx, "/repos/"+repo+"/releases/latest")
 	if err != nil { return nil, err }
 	if status == http.StatusNotFound { return nil, ErrNotFound }
 	if status == http.StatusTooManyRequests || (status == http.StatusForbidden && rateLimited(body)) { return nil, ErrRateLimited }
 	if status < 200 || status >= 300 { return nil, fmt.Errorf("github latest release: unexpected status %d", status) }
 	if err := json.Unmarshal(body, &release); err != nil { return nil, err }
-	_ = c.cache.Set(ctx, cacheKey, release, c.ttl)
+	if err := c.cache.Set(ctx, cacheKey, release, c.ttl); err != nil {
+		log.Printf("github cache set failed key=%s: %v", cacheKey, err)
+	}
 	return &release, nil
 }
 
 func (c *client) getJSON(ctx context.Context, path string) (int, []byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+	reqCtx, cancel := context.WithTimeout(ctx, githubRequestTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, c.baseURL+path, nil)
 	if err != nil { return 0, nil, err }
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "github-release-notifier")
