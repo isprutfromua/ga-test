@@ -1,246 +1,369 @@
 # GitHub Release Notifier
 
-A production-grade Go monolith that sends email notifications when new GitHub repository releases are published. Users subscribe via a clean web UI or API, confirm via email, and receive release alerts automatically.
+Go service that tracks GitHub repositories and emails subscribers when a new stable release is published.
 
----
+Users can subscribe from a static web UI or via HTTP API, confirm via tokenized email link, and later unsubscribe with a dedicated tokenized link.
 
-## Architecture
+## 1. Project Overview
 
+The application runs as a single Go service with:
+
+- HTTP API and static frontend served by the same process.
+- PostgreSQL for subscription persistence.
+- Redis for GitHub API response caching.
+- SMTP integration for confirmation and notification emails.
+- Background scanner that polls GitHub releases on an interval.
+- Prometheus metrics endpoint for observability.
+
+Main runtime flow:
+
+1. User submits email + repository.
+2. Service validates repo format and existence on GitHub.
+3. Subscription is persisted as unconfirmed and confirmation email is queued.
+4. User confirms via token link.
+5. Scanner periodically checks confirmed subscriptions and sends notification emails for new stable tags.
+
+## 2. Tech Stack
+
+- Language: Go 1.23
+- HTTP Router/Middleware: chi v5
+- Database: PostgreSQL 16 (in local compose)
+- DB Driver: pgx stdlib
+- Cache: Redis 7 (in local compose)
+- Metrics: Prometheus Go client
+- Mail testing (local): Mailpit
+- Containerization: Docker multi-stage build + distroless runtime image
+- CI: GitHub Actions workflow at .github/workflows/ci.yml
+
+## 3. Project Structure
+
+Current repository tree (relevant files):
+
+```text
+.
+├── .github/
+│   └── workflows/
+│       └── ci.yml
+├── cmd/
+│   └── server/
+│       └── main.go
+├── internal/
+│   ├── api/
+│   │   ├── contract_test.go
+│   │   ├── handler.go
+│   │   ├── handler_test.go
+│   │   ├── middleware.go
+│   │   └── router.go
+│   ├── cache/
+│   │   └── redis.go
+│   ├── config/
+│   │   └── config.go
+│   ├── db/
+│   │   ├── db.go
+│   │   └── migrations/
+│   │       └── 000001_initial.up.sql
+│   ├── github/
+│   │   ├── client.go
+│   │   └── client_test.go
+│   ├── mailer/
+│   │   ├── mailer.go
+│   │   └── mailer_test.go
+│   ├── metrics/
+│   │   └── metrics.go
+│   ├── models/
+│   │   └── models.go
+│   ├── repository/
+│   │   ├── subscription.go
+│   │   └── subscription_test.go
+│   ├── scanner/
+│   │   ├── scanner.go
+│   │   └── scanner_test.go
+│   └── service/
+│       ├── subscription.go
+│       └── subscription_test.go
+├── static/
+│   ├── error.html
+│   ├── index.html
+│   └── subscription.html
+├── .env.example
+├── Dockerfile
+├── README.md
+├── docker-compose.yml
+├── go.mod
+├── go.sum
+├── handler.go
+├── index.html
+├── scanner.go
+└── subscription.go
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      HTTP Server (chi)                       │
-│                                                              │
-│  POST /api/subscribe      GET /api/confirm/{token}           │
-│  GET  /api/unsubscribe/{token}  GET /api/subscriptions       │
-│  GET  /metrics            GET /healthz                       │
-│  GET  /  (static HTML — htmx + Tailwind)                    │
-├──────────────┬──────────────────────────────────────────────┤
-│   API Layer  │              Service Layer                    │
-│  (handlers,  │  (subscribe, confirm, unsubscribe, lookup)   │
-│  middleware) │                                              │
-├──────────────┴──────────────────────────────────────────────┤
-│            Repository Layer (Postgres)                       │
-├────────────────┬────────────────────────────────────────────┤
-│  GitHub Client │  Redis Cache (10-min TTL)                  │
-│  (rate-limit   │  Mailer (SMTP / Mailpit in dev)            │
-│   handling)    │                                            │
-├────────────────┴────────────────────────────────────────────┤
-│         Background Scanner (bounded worker pool)             │
-│         runs every SCANNER_INTERVAL, SCANNER_WORKERS goroutines │
-└─────────────────────────────────────────────────────────────┘
-```
 
-### Component responsibilities
+Module responsibilities:
 
-| Component | Package | Responsibility |
-|---|---|---|
-| **Config** | `internal/config` | Reads all settings from environment variables; fails fast on missing required values. |
-| **Database** | `internal/db` | Opens a connection pool with retry; runs `golang-migrate` migrations on startup. |
-| **Repository** | `internal/repository` | Postgres data-access layer behind a Go interface for testability. |
-| **Cache** | `internal/cache` | Redis wrapper (Get/Set/Delete). Used by GitHub client to cache API responses. |
-| **GitHub Client** | `internal/github` | Calls GitHub REST API. Handles 429/403 rate-limit responses. Results cached in Redis for 10 min. |
-| **Mailer** | `internal/mailer` | Sends HTML confirmation and release-notification emails via SMTP. |
-| **Metrics** | `internal/metrics` | Declares all Prometheus counters, histograms, and gauges. |
-| **Service** | `internal/service` | Business logic: token generation, validation, email dispatch, error mapping. |
-| **Scanner** | `internal/scanner` | Background loop. Fetches confirmed subscriptions, checks latest GitHub release, notifies if new, updates `last_seen_tag`. Uses bounded goroutine pool. |
-| **API** | `internal/api` | Chi router, middleware (API key auth, Prometheus, request logger), HTTP handlers. |
+- cmd/server: application bootstrap and graceful shutdown.
+- internal/config: environment loading, defaults, and required variable checks.
+- internal/db: database connection setup and SQL migration execution on startup.
+- internal/repository: PostgreSQL data access for subscriptions.
+- internal/github: GitHub API client, repo validation, and release lookup with Redis cache.
+- internal/service: business logic, token generation, confirmation mail queue workers.
+- internal/scanner: periodic release scanning with bounded worker pool.
+- internal/api: HTTP handlers, auth middleware, metrics middleware, route wiring.
+- internal/mailer: SMTP email delivery for confirmation and release notifications.
+- internal/metrics: Prometheus instruments registration.
+- static: browser UI pages and state pages.
 
----
+Note on root files:
 
-## Key Design Decisions
+- handler.go, scanner.go, subscription.go at repository root are marked with go:build ignore and are not compiled into runtime binaries.
 
-### Token security
-`crypto/rand` generates 32-byte (64 hex char) confirm and unsubscribe tokens. They are stored in Postgres with `UNIQUE` constraints. Every DB lookup is preceded by a fast format check (`isValidToken`) to prevent timing attacks on malformed input.
+## 4. Installation and Setup
 
-### GitHub rate limiting
-- Without a token: **60 requests/hour**
-- With `GITHUB_TOKEN`: **5,000 requests/hour**
-- All GitHub API responses (repo existence + latest release) are **Redis-cached for 10 minutes**, so repeated subscriptions to the same repo cost zero extra API calls within the cache window.
-- The scanner's bounded worker pool (`SCANNER_WORKERS`, default 5) prevents burst-exhaustion during large scan cycles.
-- Rate-limited responses are skipped and retried at the next scan interval; the error is recorded in the `notifier_github_rate_limit_hits_total` Prometheus counter.
+Prerequisites:
 
-### Scanner — bounded worker pool
-Instead of spawning one goroutine per subscription (unbounded goroutine explosion), a fixed-size pool reads from a buffered job channel:
+- Docker
+- Docker Compose plugin
 
-```
-subscriptions → [job channel] → [worker 1]
-                              → [worker 2]   → GitHub API → DB update → email
-                              → [worker N]
-```
-
-Draft and pre-release tags are filtered out — only stable releases trigger notifications.
-
-### Idiomatic error propagation
-Sentinel errors (`ErrInvalidRepo`, `ErrRepoNotFound`, `ErrAlreadyExists`, `ErrRateLimited`, `ErrTokenNotFound`) are defined at the domain boundary and flow upward through service → handler. Each handler maps them to the exact HTTP status codes specified in `swagger.yaml`.
-
-### Graceful shutdown
-1. SIGINT/SIGTERM received
-2. Scanner context cancelled → current scan cycle finishes cleanly
-3. HTTP server given 30s to drain in-flight requests
-4. Process exits
-
-### Observability
-| Metric | Type | Description |
-|---|---|---|
-| `notifier_subscriptions_created_total` | Counter | Subscriptions created |
-| `notifier_confirmations_total` | Counter | Subscriptions confirmed |
-| `notifier_unsubscribes_total` | Counter | Unsubscriptions |
-| `notifier_active_subscriptions` | Gauge | Currently active subscriptions |
-| `notifier_scan_duration_seconds` | Histogram | Full scan cycle duration |
-| `notifier_scan_errors_total` | Counter | Scan errors |
-| `notifier_emails_sent_total` | Counter | Emails sent successfully |
-| `notifier_email_errors_total` | Counter | Email failures |
-| `notifier_github_requests_total` | Counter (by status) | GitHub API call outcomes |
-| `notifier_github_rate_limit_hits_total` | Counter | Rate-limit responses |
-| `notifier_http_request_duration_seconds` | Histogram (method, route, status) | HTTP request latency |
-
-All metrics are served at `GET /metrics` (no API key required — standard for Prometheus scraping).
-
----
-
-## Running locally
-
-### Prerequisites
-- Docker and Docker Compose
-
-### Start the stack
+Local setup:
 
 ```bash
 cp .env.example .env
-# Edit .env — set GITHUB_TOKEN for higher rate limits
-
 docker compose up --build
 ```
 
-| Service | URL |
-|---|---|
-| **App** | http://localhost:8080 |
-| **Mailpit UI** (inspect emails) | http://localhost:8025 |
-| **Prometheus metrics** | http://localhost:8080/metrics |
-| **Health check** | http://localhost:8080/healthz |
+Default local endpoints:
 
-### API usage
+- App: http://localhost:8080
+- Health: http://localhost:8080/healthz
+- Metrics: http://localhost:8080/metrics
+- Mailpit UI: http://localhost:8025
 
-All `/api/*` endpoints require the `X-API-Key` header:
+## 5. Development Workflow
+
+Recommended flow:
+
+1. Start dependencies and app with docker compose.
+2. Make code changes in internal modules.
+3. Run lint and tests locally:
 
 ```bash
-# Subscribe
+golangci-lint run --timeout=3m
+go test ./...
+```
+
+4. Install repository Git hooks (one-time) to run tests before every push:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+5. Run focused contract checks before opening PR:
+
+```bash
+go test ./internal/api -run 'TestSwaggerContractStatusMatrix|TestAuthBoundaries'
+```
+
+6. Open PR and let GitHub Actions run the same checks.
+
+Useful API calls:
+
+```bash
 curl -X POST http://localhost:8080/api/subscribe \
   -H "X-API-Key: dev-api-key-change-in-production" \
   -d "email=you@example.com&repo=golang/go"
 
-# List subscriptions
 curl "http://localhost:8080/api/subscriptions?email=you@example.com" \
   -H "X-API-Key: dev-api-key-change-in-production"
 
-# Confirm (token from email)
-curl "http://localhost:8080/api/confirm/{token}" \
-  -H "X-API-Key: dev-api-key-change-in-production"
-
-# Unsubscribe
-curl "http://localhost:8080/api/unsubscribe/{token}" \
-  -H "X-API-Key: dev-api-key-change-in-production"
+curl "http://localhost:8080/api/confirm/<token>"
+curl "http://localhost:8080/api/unsubscribe/<token>"
 ```
 
----
+Protected endpoints:
 
-## Running tests
+- POST /api/subscribe
+- GET /api/subscriptions
+
+Public endpoints:
+
+- GET /api/confirm/{token}
+- GET /api/unsubscribe/{token}
+- GET /healthz
+- GET /metrics
+
+## 6. Environment Configuration
+
+Primary environment template: .env.example
+
+Required variables (enforced in config loader):
+
+- API_KEY
+- DATABASE_URL
+- SMTP_HOST
+- SMTP_FROM
+
+Important optional variables:
+
+- GITHUB_TOKEN: strongly recommended for higher GitHub API rate limits.
+- BASE_URL: used when constructing confirmation/unsubscribe links in emails.
+- SCANNER_INTERVAL, SCANNER_WORKERS: controls scanner cadence and concurrency.
+- GITHUB_CACHE_TTL: Redis cache TTL for GitHub responses.
+
+Docker compose overrides to use container hostnames:
+
+- DOCKER_DATABASE_URL
+- DOCKER_REDIS_ADDR
+- DOCKER_SMTP_HOST
+
+## 7. Linting and Code Quality
+
+Linting is configured via `.golangci.yml`.
+
+Enabled linters:
+
+- govet
+- ineffassign
+- staticcheck
+
+Practical quality checks currently available:
 
 ```bash
-# Unit tests (no external services required)
-go test ./internal/service/... ./internal/github/... ./internal/scanner/... -v
-
-# All tests with race detector
+golangci-lint run --timeout=3m
+go test ./...
 go test -race -count=1 ./...
+go vet ./...
+```
 
-# With coverage
+## 8. Testing and Checkers
+
+Present test coverage includes:
+
+- API handler and contract tests in internal/api
+- GitHub client tests in internal/github
+- Mailer tests in internal/mailer
+- Repository tests in internal/repository
+- Scanner tests in internal/scanner
+- Service tests in internal/service
+
+Run all tests:
+
+```bash
+go test ./...
+```
+
+Run with race detector:
+
+```bash
+go test -race -count=1 ./...
+```
+
+Run coverage:
+
+```bash
 go test -coverprofile=coverage.out ./...
 go tool cover -html=coverage.out
 ```
 
----
+Contract safety checks:
 
-## Deploying to DigitalOcean
+- TestSwaggerContractStatusMatrix
+- TestAuthBoundaries
 
-### Required GitHub Actions secrets
+These are executed in CI via internal/api/contract_test.go.
 
-| Secret | Description |
-|---|---|
-| `DIGITALOCEAN_ACCESS_TOKEN` | DigitalOcean API token |
-| `DO_REGISTRY_NAME` | Container registry name (e.g. `my-registry`) |
-| `DO_DROPLET_IP` | Droplet public IP |
-| `DO_SSH_USER` | SSH user (e.g. `root`) |
-| `DO_SSH_KEY` | Private SSH key |
+## 9. CI/CD Pipelines
 
-### Droplet setup
+CI exists via .github/workflows/ci.yml.
+
+Trigger:
+
+- push
+- pull_request
+
+Pipeline stages currently implemented:
+
+1. Run lint job with golangci-lint
+2. Run contract-focused API tests
+3. Run full go test ./...
+
+Important: there is no CD stage in the repository workflow today (no image publish and no remote deployment step).
+
+## 10. Deployment Process
+
+Current deployment automation in-repo:
+
+- None.
+
+Practical deployment strategy with existing assets:
+
+1. Build image with Dockerfile.
+2. Provide runtime environment variables.
+3. Run app container together with Postgres and Redis (or managed equivalents).
+
+Example (single host using compose file as baseline):
 
 ```bash
-# On the Droplet
-apt update && apt install -y docker.io docker-compose-plugin
-mkdir -p /opt/github-release-notifier
-cd /opt/github-release-notifier
-
-# Copy docker-compose.yml and .env to the droplet
-# Set production values in .env, especially:
-#   API_KEY, GITHUB_TOKEN, SMTP_*, BASE_URL, DATABASE_URL
-
-docker compose up -d
+docker compose up -d --build
 ```
 
-Every push to `main` triggers the CI pipeline:
-1. **Lint** via golangci-lint
-2. **Test** with race detector (Postgres + Redis service containers)
-3. **Build** Docker image
-4. **Push** to DigitalOcean Container Registry
-5. **Deploy** to the Droplet via SSH
+For production hardening, ensure:
 
----
+- Strong API_KEY.
+- Valid SMTP credentials.
+- Persistent PostgreSQL storage.
+- Restricted network exposure for Redis/PostgreSQL.
 
-## Environment variables reference
+## 11. Monitoring and Logging
 
-See [`.env.example`](.env.example) for the full list with descriptions.
+Monitoring:
 
-Required: `API_KEY`, `DATABASE_URL`, `SMTP_HOST`, `SMTP_FROM`, `BASE_URL`
+- Prometheus metrics exposed on GET /metrics.
+- Metrics include subscription lifecycle, scan duration/errors, GitHub request outcomes, email send outcomes, and HTTP request latency.
 
-Strongly recommended: `GITHUB_TOKEN` (raises GitHub rate limit from 60/hr to 5,000/hr)
+Logging:
 
----
+- Application uses standard library logging and prints operational errors/events.
+- No structured logging stack or log shipping configuration is defined in this repository.
 
-## Project structure
+## 12. Scripts and Automation
 
-```
-.
-├── cmd/server/main.go                  # Entry point
-├── internal/
-│   ├── api/
-│   │   ├── handler.go                  # HTTP handlers
-│   │   ├── handler_test.go
-│   │   ├── middleware.go               # Auth, metrics, logging
-│   │   └── router.go                   # Chi router wiring
-│   ├── cache/redis.go                  # Redis cache abstraction
-│   ├── config/config.go                # Environment config
-│   ├── db/
-│   │   ├── db.go                       # Connection + migration runner
-│   │   └── migrations/
-│   │       └── 000001_initial.up.sql
-│   ├── github/
-│   │   ├── client.go                   # GitHub API client
-│   │   └── client_test.go
-│   ├── mailer/mailer.go                # SMTP email sender
-│   ├── metrics/metrics.go              # Prometheus instruments
-│   ├── models/models.go                # Domain types
-│   ├── repository/subscription.go      # Postgres data-access
-│   ├── scanner/
-│   │   ├── scanner.go                  # Background release scanner
-│   │   └── scanner_test.go
-│   └── service/
-│       ├── subscription.go             # Business logic
-│       └── subscription_test.go
-├── static/index.html                   # htmx + Tailwind UI
-├── Dockerfile                          # Multi-stage, distroless runtime
-├── docker-compose.yml                  # Full local stack
-├── .github/workflows/ci.yml            # Lint → Test → Build → Deploy
-├── .golangci.yml                       # Linter configuration
-├── .env.example                        # Config reference
-└── README.md
-```
+Repository automation currently available:
+
+- Dockerfile for container image build.
+- docker-compose.yml for local multi-service orchestration.
+- GitHub Actions workflow for CI test automation.
+- Git pre-push hook at .githooks/pre-push (runs go test ./... and blocks push on failure).
+
+Repository automation not present:
+
+- No Makefile.
+- No task runner scripts.
+- No release automation workflow.
+
+## 13. Contributing Guidelines
+
+Recommended contribution checklist:
+
+1. Branch from main.
+2. Keep changes scoped to one concern.
+3. Ensure hooks are enabled once per clone: git config core.hooksPath .githooks.
+4. Run go test ./... locally (also enforced by pre-push hook).
+5. If HTTP behavior changes, update/add API contract tests in internal/api.
+6. Update .env.example and this README when config or operational behavior changes.
+7. Open PR and ensure GitHub Actions passes.
+
+## Changes Summary
+
+Fixed:
+
+- Removed unsupported claims about lint, build, registry push, and DigitalOcean deployment in CI.
+- Removed references to files not present in repository (for example swagger.yaml, .golangci.yml, task.md).
+- Corrected runtime architecture details to match actual implementation.
+
+Added:
+
+- Explicit sectioning for setup, workflow, environment, quality checks, CI/CD, deployment, monitoring, and automation.
+- Accurate endpoint/auth boundary documentation from router implementation.
+- Clarification about build-ignored root files.
+
+Removed:
+
+- Deployment instructions and secret requirements not backed by repository automation.

@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "[pre-push] Running test suite..."
+go test ./...
+echo "[pre-push] Tests passed. Proceeding with push."
