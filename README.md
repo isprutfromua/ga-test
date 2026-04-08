@@ -155,6 +155,14 @@ go test ./...
 git config core.hooksPath .githooks
 ```
 
+If hooks do not run on push, verify:
+
+```bash
+git config --get core.hooksPath
+```
+
+Expected: `.githooks`
+
 5. Run focused contract checks before opening PR:
 
 ```bash
@@ -337,33 +345,3 @@ Repository automation not present:
 - No Makefile.
 - No task runner scripts.
 - No release automation workflow.
-
-## 13. Contributing Guidelines
-
-Recommended contribution checklist:
-
-1. Branch from main.
-2. Keep changes scoped to one concern.
-3. Ensure hooks are enabled once per clone: git config core.hooksPath .githooks.
-4. Run go test ./... locally (also enforced by pre-push hook).
-5. If HTTP behavior changes, update/add API contract tests in internal/api.
-6. Update .env.example and this README when config or operational behavior changes.
-7. Open PR and ensure GitHub Actions passes.
-
-## Changes Summary
-
-Fixed:
-
-- Removed unsupported claims about lint, build, registry push, and DigitalOcean deployment in CI.
-- Removed references to files not present in repository (for example swagger.yaml, .golangci.yml, task.md).
-- Corrected runtime architecture details to match actual implementation.
-
-Added:
-
-- Explicit sectioning for setup, workflow, environment, quality checks, CI/CD, deployment, monitoring, and automation.
-- Accurate endpoint/auth boundary documentation from router implementation.
-- Clarification about build-ignored root files.
-
-Removed:
-
-- Deployment instructions and secret requirements not backed by repository automation.
