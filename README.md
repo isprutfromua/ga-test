@@ -136,9 +136,11 @@ Default local endpoints:
 - Metrics: http://localhost:8080/metrics
 - Mailpit UI: http://localhost:8025
 
-Deployed website:
+Deployed website (Production):
 
 - App: https://ga-test-app-82466e574c85.herokuapp.com/
+- Metrics: https://ga-test-app-82466e574c85.herokuapp.com/metrics
+- Swagger Editor: https://editor.swagger.io/?url=https://raw.githubusercontent.com/isprutfromua/ga-test/main/swagger.yaml
 
 ## 5. Development Workflow
 
@@ -402,9 +404,3 @@ Repository automation currently available:
 - docker-compose.yml for local multi-service orchestration.
 - GitHub Actions workflow for CI test automation.
 - Git pre-push hook at .githooks/pre-push (runs go test ./... and blocks push on failure).
-
-Repository automation not present:
-
-- No Makefile.
-- No task runner scripts.
-- No release automation workflow.
