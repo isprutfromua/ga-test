@@ -1,8 +1,8 @@
 package config
 
 import (
-	"net/url"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -77,10 +77,8 @@ func Load() (*Config, error) {
 	if apiKey == "" { return nil, fmt.Errorf("API_KEY is required") }
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" { return nil, fmt.Errorf("DATABASE_URL is required") }
-	smtpHost := os.Getenv("SMTP_HOST")
-	if smtpHost == "" { return nil, fmt.Errorf("SMTP_HOST is required") }
-	smtpFrom := os.Getenv("SMTP_FROM")
-	if smtpFrom == "" { return nil, fmt.Errorf("SMTP_FROM is required") }
+	smtpCfg, err := loadSMTPConfig()
+	if err != nil { return nil, err }
 	redisDB, err := intEnv("REDIS_DB", 0)
 	if err != nil { return nil, err }
 	workers, err := intEnv("SCANNER_WORKERS", 5)
@@ -95,9 +93,67 @@ func Load() (*Config, error) {
 		Database: DatabaseConfig{URL: databaseURL},
 		Redis: redisCfg,
 		GitHub: GitHubConfig{Token: os.Getenv("GITHUB_TOKEN"), Base: getenv("GITHUB_BASE_URL", "https://api.github.com")},
-		SMTP: SMTPConfig{Host: smtpHost, Port: getenv("SMTP_PORT", "1025"), Username: os.Getenv("SMTP_USERNAME"), Password: os.Getenv("SMTP_PASSWORD"), From: smtpFrom, UseTLS: getenv("SMTP_TLS", "false") == "true"},
+		SMTP: smtpCfg,
 		Scanner: ScannerConfig{Interval: interval, Workers: workers},
 		Auth:    AuthConfig{APIKey: apiKey},
+	}, nil
+}
+
+func loadSMTPConfig() (SMTPConfig, error) {
+	smtpFrom := os.Getenv("SMTP_FROM")
+	if smtpFrom == "" {
+		return SMTPConfig{}, fmt.Errorf("SMTP_FROM is required")
+	}
+
+	if cloudMailinURL := os.Getenv("CLOUDMAILIN_SMTP_URL"); cloudMailinURL != "" {
+		cfg, err := parseSMTPURL("CLOUDMAILIN_SMTP_URL", cloudMailinURL)
+		if err != nil {
+			return SMTPConfig{}, err
+		}
+		cfg.From = smtpFrom
+		return cfg, nil
+	}
+
+	smtpHost := os.Getenv("SMTP_HOST")
+	if smtpHost == "" {
+		return SMTPConfig{}, fmt.Errorf("SMTP_HOST is required")
+	}
+
+	return SMTPConfig{
+		Host:     smtpHost,
+		Port:     getenv("SMTP_PORT", "1025"),
+		Username: os.Getenv("SMTP_USERNAME"),
+		Password: os.Getenv("SMTP_PASSWORD"),
+		From:     smtpFrom,
+		UseTLS:   getenv("SMTP_TLS", "false") == "true",
+	}, nil
+}
+
+func parseSMTPURL(varName, rawURL string) (SMTPConfig, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return SMTPConfig{}, fmt.Errorf("parsing %s: %w", varName, err)
+	}
+
+	if parsed.Hostname() == "" {
+		return SMTPConfig{}, fmt.Errorf("%s missing host", varName)
+	}
+
+	port := parsed.Port()
+	if port == "" {
+		port = "587"
+	}
+
+	password, _ := parsed.User.Password()
+	startTLS := parsed.Query().Get("starttls")
+	useTLS := startTLS == "" || strings.EqualFold(startTLS, "true")
+
+	return SMTPConfig{
+		Host:     parsed.Hostname(),
+		Port:     port,
+		Username: parsed.User.Username(),
+		Password: password,
+		UseTLS:   useTLS,
 	}, nil
 }
 

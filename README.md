@@ -205,8 +205,12 @@ Required variables (enforced in config loader):
 
 - API_KEY
 - DATABASE_URL
-- SMTP_HOST
 - SMTP_FROM
+
+SMTP transport configuration:
+
+- Preferred on Heroku with CloudMailin add-on: `CLOUDMAILIN_SMTP_URL` (auto-injected by Heroku).
+- Fallback/manual SMTP: `SMTP_HOST` (required when `CLOUDMAILIN_SMTP_URL` is not set), plus optional `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_TLS`.
 
 Important optional variables:
 
@@ -218,6 +222,12 @@ Important optional variables:
 - REDIS_TLS_URL: if present, takes precedence over REDIS_URL and is recommended for Heroku Redis TLS.
 - REDIS_TLS_SERVER_NAME: optional TLS SNI/hostname override for certificate validation.
 - REDIS_TLS_INSECURE_SKIP_VERIFY: set to true only as a temporary workaround when provider CA chains are unavailable in runtime trust store.
+
+Heroku + CloudMailin notes:
+
+- CloudMailin exposes `CLOUDMAILIN_SMTP_URL` in format like `smtp://usr:pswd@host.name.example.net:587?starttls=true`.
+- The app parses this URL automatically and uses it for outbound emails.
+- `SMTP_FROM` is still required and should be set to your sender address.
 
 Docker compose overrides to use container hostnames:
 
